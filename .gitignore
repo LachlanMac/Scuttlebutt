@@ -1,0 +1,33 @@
+# Unity generated
+*.meta
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+
+# IDE
+.vs/
+.vscode/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packages (managed by Unity)
+Packages/
+
+# Plugins binaries (optional - uncomment if you want to track)
+# Plugins/
+
+# A* Pathfinding Pro (large asset, don't track)
+AstarPathfindingProject/
