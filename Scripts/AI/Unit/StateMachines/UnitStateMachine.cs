@@ -23,6 +23,9 @@ namespace Starbelter.AI
 
         public void Update()
         {
+            // Don't update if unit is dead
+            if (controller.IsDead) return;
+
             currentState?.Update();
         }
 
@@ -31,6 +34,9 @@ namespace Starbelter.AI
         /// </summary>
         public void ChangeState<T>() where T : UnitState, new()
         {
+            // Don't change state if unit is dead
+            if (controller.IsDead) return;
+
             // Exit current state
             currentState?.Exit();
 
@@ -47,6 +53,9 @@ namespace Starbelter.AI
         /// </summary>
         public void ChangeState(UnitState newState)
         {
+            // Don't change state if unit is dead
+            if (controller.IsDead) return;
+
             // Exit current state
             currentState?.Exit();
 

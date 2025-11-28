@@ -10,8 +10,13 @@ namespace Starbelter.AI
     /// access to unit components for states to use.
     /// </summary>
     [RequireComponent(typeof(UnitMovement))]
-    public class UnitController : MonoBehaviour
+    public class UnitController : MonoBehaviour, Core.ITargetable
     {
+        // ITargetable implementation
+        Team Core.ITargetable.Team => team;
+        public Transform Transform => transform;
+        public bool IsDead => unitHealth != null && unitHealth.IsDead;
+
         [Header("Team")]
         [SerializeField] private Team team = Team.Ally;
 
@@ -20,6 +25,11 @@ namespace Starbelter.AI
 
         [Header("References")]
         [SerializeField] private ThreatManager threatManager;
+
+        [Header("Weapon")]
+        [SerializeField] private GameObject projectilePrefab;
+        [SerializeField] private Transform firePoint;
+        [SerializeField] private float weaponRange = 15f;
 
         // Components
         private UnitMovement movement;
@@ -32,6 +42,15 @@ namespace Starbelter.AI
         public UnitMovement Movement => movement;
         public UnitHealth Health => unitHealth;
         public ThreatManager ThreatManager => threatManager;
+        public GameObject ProjectilePrefab => projectilePrefab;
+        public Transform FirePoint => firePoint;
+        public float WeaponRange => weaponRange;
+
+        /// <summary>
+        /// The actual position projectiles will fire from.
+        /// Use this for LOS checks to ensure consistency with actual shots.
+        /// </summary>
+        public Vector3 FirePosition => firePoint != null ? firePoint.position : transform.position;
 
         /// <summary>
         /// Is the unit currently in cover from the highest threat direction?

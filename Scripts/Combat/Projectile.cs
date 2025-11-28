@@ -1,5 +1,6 @@
 using UnityEngine;
 using Starbelter.Core;
+using Starbelter.Pathfinding;
 
 namespace Starbelter.Combat
 {
@@ -24,6 +25,10 @@ namespace Starbelter.Combat
         [Header("Team")]
         [SerializeField] private Team sourceTeam = Team.Neutral;
 
+        [Header("Cover Ignore")]
+        [Tooltip("Projectile ignores structures within this distance of spawn point")]
+        [SerializeField] private float ignoreStructureRadius = 1.5f;
+
         private Rigidbody2D rb;
         private Vector2 direction;
         private Vector2 origin;
@@ -37,6 +42,8 @@ namespace Starbelter.Combat
         private void Awake()
         {
             rb = GetComponent<Rigidbody2D>();
+            // Set origin immediately in case collision happens before Fire() is called
+            origin = transform.position;
         }
 
         private void Start()
@@ -82,17 +89,26 @@ namespace Starbelter.Combat
             var structure = other.GetComponent<Structure>();
             if (structure != null)
             {
+                // Ignore HALF cover close to spawn point (shooter peeking over their cover)
+                // Full cover always blocks, even at close range
+                float distFromOrigin = Vector2.Distance(origin, transform.position);
+                if (distFromOrigin < ignoreStructureRadius && structure.CoverType == CoverType.Half)
+                {
+                    return; // Pass through half cover - too close to shooter
+                }
+
                 // Ask structure if we're blocked
                 if (structure.TryBlockProjectile(this))
                 {
                     // Blocked - spawn hit effect and destroy projectile
+                    Debug.Log($"[Projectile] Blocked by structure {structure.name} ({structure.CoverType}) at {transform.position}, origin was {origin}");
                     if (hitEffectPrefab != null)
                     {
                         Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
                     }
                     Destroy(gameObject);
                 }
-                // Not blocked - continue through
+                // Not blocked - continue through (half cover has % chance)
                 return;
             }
 
@@ -100,6 +116,13 @@ namespace Starbelter.Combat
             var unitHealth = other.GetComponent<UnitHealth>();
             if (unitHealth != null)
             {
+                // Check for friendly fire - get team from ITargetable on parent
+                var targetable = other.GetComponentInParent<ITargetable>();
+                if (targetable != null && targetable.Team == sourceTeam)
+                {
+                    return; // Ignore same-team hits (no friendly fire)
+                }
+
                 bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction);
 
                 if (wasHit)

@@ -175,6 +175,39 @@ namespace Starbelter.Pathfinding
                 .ToList();
         }
 
+        /// <summary>
+        /// Gets all cover positions within a radius, regardless of threat direction.
+        /// Used for flank position searching.
+        /// </summary>
+        public List<CoverResult> GetAllCoverPositions(Vector2 centerPosition, float maxDistance)
+        {
+            if (coverBaker == null) return new List<CoverResult>();
+
+            var results = new List<CoverResult>();
+            var allCover = coverBaker.GetAllCoverData();
+
+            foreach (var kvp in allCover)
+            {
+                var tilePos = kvp.Key;
+                var worldPos = coverBaker.TileToWorld(tilePos);
+
+                float distance = Vector2.Distance(centerPosition, (Vector2)worldPos);
+                if (distance > maxDistance) continue;
+                if (distance < 0.5f) continue; // Skip positions too close
+
+                results.Add(new CoverResult
+                {
+                    TilePosition = tilePos,
+                    WorldPosition = worldPos,
+                    DistanceFromUnit = distance,
+                    Score = 1f, // Base score, will be evaluated by caller
+                    CoverSources = kvp.Value
+                });
+            }
+
+            return results;
+        }
+
         private List<CoverResult> FindCoverCandidates(Vector3 unitPosition, Vector3 threatPosition, float maxDistance)
         {
             var results = new List<CoverResult>();

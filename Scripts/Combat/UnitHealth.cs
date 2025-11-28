@@ -252,8 +252,38 @@ namespace Starbelter.Combat
 
             OnDeath?.Invoke();
 
-            // Destroy the unit
-            Destroy(gameObject);
+            // Find the root unit transform
+            Transform rootTransform = transform;
+            if (unitController != null)
+            {
+                rootTransform = unitController.transform;
+            }
+            else
+            {
+                var targetable = GetComponentInParent<ITargetable>();
+                if (targetable != null)
+                {
+                    rootTransform = targetable.Transform;
+                }
+            }
+
+            // "Ragdoll" - rotate 90 degrees to show they're dead
+            rootTransform.rotation = Quaternion.Euler(0, 0, 90f);
+
+            // Disable movement if present
+            var movement = rootTransform.GetComponent<AI.UnitMovement>();
+            if (movement != null)
+            {
+                movement.Stop();
+                movement.enabled = false;
+            }
+
+            // Disable the hitbox collider so they can't be shot anymore
+            var hitboxCollider = GetComponent<Collider2D>();
+            if (hitboxCollider != null)
+            {
+                hitboxCollider.enabled = false;
+            }
         }
     }
 }

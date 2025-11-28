@@ -6,7 +6,7 @@ namespace Starbelter.Core
     /// <summary>
     /// Basic player controller for testing. WASD movement, click to shoot.
     /// </summary>
-    public class PlayerController : MonoBehaviour
+    public class PlayerController : MonoBehaviour, ITargetable
     {
         [Header("Movement")]
         [SerializeField] private float moveSpeed = 5f;
@@ -18,10 +18,17 @@ namespace Starbelter.Core
 
         private Camera mainCamera;
         private float nextFireTime;
+        private UnitHealth unitHealth;
+
+        // ITargetable implementation
+        public Team Team => team;
+        public Transform Transform => transform;
+        public bool IsDead => unitHealth != null && unitHealth.IsDead;
 
         private void Start()
         {
             mainCamera = Camera.main;
+            unitHealth = GetComponentInChildren<UnitHealth>();
         }
 
         private void Update()
