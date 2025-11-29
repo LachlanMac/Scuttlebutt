@@ -1,4 +1,5 @@
 using UnityEngine;
+using Starbelter.Combat;
 using Starbelter.Pathfinding;
 
 namespace Starbelter.AI
@@ -123,9 +124,8 @@ namespace Starbelter.AI
                 }
             }
 
-            // Convert threat direction to a world position to seek cover from
             Vector3 unitPos = controller.transform.position;
-            Vector3 threatWorldPos = unitPos + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+            Vector3 threatWorldPos = CombatUtils.ThreatDirectionToWorldPos(unitPos, threatDir.Value);
 
             // Find cover that protects from this threat
             var coverQuery = CoverQuery.Instance;
@@ -139,7 +139,9 @@ namespace Starbelter.AI
             // Use tactical search with posture
             int bravery = controller.Character?.Bravery ?? 10;
             var leaderPos = controller.GetLeaderPosition();
-            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos);
+            var rallyPoint = controller.GetRallyPoint();
+            bool isLeader = controller.IsSquadLeader;
+            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos, rallyPoint, isLeader);
 
             var coverResult = coverQuery.FindBestCover(unitPos, threatWorldPos, searchParams, -1f, controller.gameObject);
 

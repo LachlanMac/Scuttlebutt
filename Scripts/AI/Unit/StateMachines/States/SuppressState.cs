@@ -87,8 +87,15 @@ namespace Starbelter.AI
         {
             suppressDuration += Time.deltaTime;
 
+            // Update suppress position to track target movement
+            if (suppressTarget != null)
+            {
+                suppressPosition = suppressTarget.transform.position;
+            }
+
             // Check if target is now exposed - but only react if they were in full cover before
             // Don't exit just because we started suppressing a target in half cover
+            // Also require they stay exposed for a moment (not just peeking)
             var los = CombatUtils.CheckLineOfSight(
                 controller.FirePosition,
                 suppressPosition
@@ -96,11 +103,16 @@ namespace Starbelter.AI
 
             if (targetWasInFullCover && !los.IsBlocked)
             {
-                // Target WAS in full cover but is now exposed - take a real shot!
-                Debug.Log($"[{controller.name}] SuppressState: Target exposed from full cover, switching to combat");
-                var combatState = new CombatState(suppressTarget);
-                stateMachine.ChangeState(combatState);
-                return;
+                // Target WAS in full cover but is now exposed
+                // Only switch if we've been suppressing for at least a moment
+                // (prevents instant exit due to LOS check timing)
+                if (suppressDuration > 0.5f)
+                {
+                    Debug.Log($"[{controller.name}] SuppressState: Target exposed from full cover, switching to combat");
+                    var combatState = new CombatState(suppressTarget);
+                    stateMachine.ChangeState(combatState);
+                    return;
+                }
             }
 
             // Check if we can still suppress (own cover might now block)
@@ -113,7 +125,7 @@ namespace Starbelter.AI
             }
 
             // Stop suppressing if taking too much fire
-            if (ThreatManager != null && ThreatManager.GetTotalThreat() > 30f)
+            if (ThreatManager != null && ThreatManager.GetTotalThreat() > CombatUtils.SUPPRESSION_ABORT_THREAT)
             {
                 ChangeState<SeekCoverState>();
                 return;
@@ -160,9 +172,7 @@ namespace Starbelter.AI
 
         private bool IsSuppressTargetDead()
         {
-            if (suppressTarget == null) return true;
-            var targetable = suppressTarget.GetComponent<ITargetable>();
-            return targetable != null && targetable.IsDead;
+            return CombatUtils.IsTargetDead(suppressTarget);
         }
 
         /// <summary>
@@ -218,64 +228,32 @@ namespace Starbelter.AI
         {
             if (controller.ProjectilePrefab == null) return;
 
-            Vector3 firePos = controller.FirePosition;
-            Vector2 baseDirection = (suppressPosition - (Vector2)firePos).normalized;
-
-            // Much wider spread for suppression
+            // Much wider spread for suppression (3x normal)
             float baseSpread = 5f * Mathf.Deg2Rad;
-            float spread = baseSpread * SUPPRESS_SPREAD_MULTIPLIER;
+            float suppressSpread = baseSpread * SUPPRESS_SPREAD_MULTIPLIER;
 
-            float angle = Mathf.Atan2(baseDirection.y, baseDirection.x);
-            angle += Random.Range(-spread, spread);
-            Vector2 finalDirection = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-
-            GameObject projectileObj = Object.Instantiate(
-                controller.ProjectilePrefab,
-                firePos,
-                Quaternion.identity
-            );
-
-            var projectile = projectileObj.GetComponent<Projectile>();
-            if (projectile != null)
+            var shootParams = new CombatUtils.ShootParams
             {
-                projectile.Fire(finalDirection, controller.Team, controller.gameObject);
-            }
-            else
-            {
-                Object.Destroy(projectileObj);
-            }
+                FirePosition = controller.FirePosition,
+                TargetPosition = suppressPosition,
+                SpreadRadians = suppressSpread,
+                Team = controller.Team,
+                SourceUnit = controller.gameObject,
+                ProjectilePrefab = controller.ProjectilePrefab
+            };
+
+            CombatUtils.ShootProjectile(shootParams);
         }
 
         private GameObject FindExposedTarget()
         {
-            var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
-
-            foreach (var mb in allTargets)
-            {
-                var targetable = mb as ITargetable;
-                if (targetable == null) continue;
-                if (targetable.Transform == controller.transform) continue;
-                if (targetable.Team == controller.Team) continue;
-                if (targetable.IsDead) continue;
-
-                // Skip the target we're currently suppressing - don't switch off for them
-                if (suppressTarget != null && targetable.Transform.gameObject == suppressTarget) continue;
-
-                float dist = Vector3.Distance(controller.transform.position, targetable.Transform.position);
-                if (dist > controller.WeaponRange) continue;
-
-                var los = CombatUtils.CheckLineOfSight(
-                    controller.FirePosition,
-                    targetable.Transform.position
-                );
-
-                if (!los.IsBlocked)
-                {
-                    return targetable.Transform.gameObject;
-                }
-            }
-
-            return null;
+            return CombatUtils.FindExposedTarget(
+                controller.FirePosition,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform,
+                suppressTarget  // Exclude current suppress target
+            );
         }
     }
 }

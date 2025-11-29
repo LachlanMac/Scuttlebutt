@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Linq;
 using Starbelter.Core;
 using Starbelter.Combat;
 using Starbelter.Pathfinding;
@@ -24,30 +23,15 @@ namespace Starbelter.AI
             ScanForThreats();
         }
 
-        /// <summary>
-        /// Scans for enemies and registers them as threats without transitioning states.
-        /// </summary>
         private void ScanForThreats()
         {
-            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
-                .OfType<ITargetable>()
-                .ToArray();
-
-            float weaponRange = controller.WeaponRange;
-
-            foreach (var target in allTargets)
-            {
-                if (target.Transform == controller.transform) continue;
-                if (target.Team == controller.Team) continue;
-                if (controller.Team == Team.Neutral) continue;
-                if (target.IsDead) continue;
-
-                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
-                if (distance <= weaponRange && ThreatManager != null)
-                {
-                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
-                }
-            }
+            CombatUtils.ScanAndRegisterThreats(
+                controller.transform.position,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform,
+                ThreatManager
+            );
         }
 
         public override void Update()
@@ -86,61 +70,22 @@ namespace Starbelter.AI
             Vector2? threatDir = ThreatManager.GetHighestThreatDirection();
             if (!threatDir.HasValue) return false;
 
-            // Convert threat direction to world position
             Vector3 unitPos = controller.transform.position;
-            Vector3 threatWorldPos = unitPos + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+            Vector3 threatWorldPos = CombatUtils.ThreatDirectionToWorldPos(unitPos, threatDir.Value);
 
-            // Check if current position has cover against the threat
             var coverCheck = coverQuery.CheckCoverAt(unitPos, threatWorldPos);
             return coverCheck.HasCover;
         }
 
         private GameObject FindTarget()
         {
-            // Find best enemy target using priority scoring
-            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
-                .OfType<ITargetable>()
-                .ToArray();
-
-            float weaponRange = controller.WeaponRange;
-            float bestPriority = 0f;
-            GameObject bestTarget = null;
-
-            foreach (var target in allTargets)
-            {
-                // Skip self
-                if (target.Transform == controller.transform) continue;
-
-                // Skip same team (and neutrals don't fight)
-                if (target.Team == controller.Team) continue;
-                if (controller.Team == Team.Neutral) continue;
-
-                // Skip dead targets
-                if (target.IsDead) continue;
-
-                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
-
-                // Register visible enemies within weapon range as threats
-                if (distance <= weaponRange && ThreatManager != null)
-                {
-                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
-                }
-
-                // Calculate priority based on distance and cover
-                float priority = CombatUtils.CalculateTargetPriority(
-                    controller.transform.position,
-                    target.Transform.position,
-                    weaponRange
-                );
-
-                if (priority > bestPriority)
-                {
-                    bestPriority = priority;
-                    bestTarget = target.Transform.gameObject;
-                }
-            }
-
-            return bestTarget;
+            return CombatUtils.FindBestTarget(
+                controller.transform.position,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform,
+                ThreatManager
+            );
         }
     }
 }

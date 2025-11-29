@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Linq;
 using Starbelter.Core;
 using Starbelter.Combat;
 
@@ -174,7 +173,20 @@ namespace Starbelter.AI
         /// </summary>
         private void FindFightingPosition()
         {
-            // Get threat direction
+            // Do a quick threat sweep before picking a position
+            // This ensures we account for enemy positions even if we haven't been shot at recently
+            if (ThreatManager != null)
+            {
+                CombatUtils.ScanAndRegisterThreats(
+                    controller.transform.position,
+                    controller.WeaponRange,
+                    controller.Team,
+                    controller.transform,
+                    ThreatManager
+                );
+            }
+
+            // Get threat direction (now updated with enemy positions)
             Vector2 threatDir = Vector2.up; // Default
             if (ThreatManager != null)
             {
@@ -195,7 +207,9 @@ namespace Starbelter.AI
                 controller.WeaponRange,
                 Pathfinding.CoverQuery.Instance,
                 controller.gameObject,
-                controller.Team
+                controller.Team,
+                controller.GetRallyPoint(),
+                controller.IsSquadLeader
             );
 
             if (fightingResult.Found)
@@ -218,9 +232,29 @@ namespace Starbelter.AI
             else
             {
                 // No fighting position found - try aggressive flank as last resort
-                Debug.Log($"[{controller.name}] No fighting position found, trying flank");
-                var flankState = new FlankState(watchTarget);
-                stateMachine.ChangeState(flankState);
+                // But leaders should NOT flank unless squad is very small
+                bool canFlank = true;
+                if (controller.IsSquadLeader && controller.Squad != null)
+                {
+                    int aliveCount = controller.Squad.GetAliveUnitCount();
+                    if (aliveCount >= 3)
+                    {
+                        canFlank = false;
+                        Debug.Log($"[{controller.name}] Leader won't flank (squad has {aliveCount} alive)");
+                    }
+                }
+
+                if (canFlank)
+                {
+                    Debug.Log($"[{controller.name}] No fighting position found, trying flank");
+                    var flankState = new FlankState(watchTarget);
+                    stateMachine.ChangeState(flankState);
+                }
+                else
+                {
+                    // Stay in overwatch, reset timer
+                    engagedTimer = 0f;
+                }
             }
         }
 
@@ -241,81 +275,27 @@ namespace Starbelter.AI
 
         private bool IsWatchTargetDead()
         {
-            if (watchTarget == null) return true;
-            var targetable = watchTarget.GetComponent<ITargetable>();
-            return targetable != null && targetable.IsDead;
+            return CombatUtils.IsTargetDead(watchTarget);
         }
 
-        /// <summary>
-        /// Find any exposed enemy target (not in full cover).
-        /// </summary>
         private GameObject FindExposedTarget()
         {
-            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
-                .OfType<ITargetable>()
-                .ToArray();
-
-            float weaponRange = controller.WeaponRange;
-
-            foreach (var target in allTargets)
-            {
-                if (target.Transform == controller.transform) continue;
-                if (target.Team == controller.Team) continue;
-                if (controller.Team == Team.Neutral) continue;
-                if (target.IsDead) continue;
-
-                float dist = Vector3.Distance(controller.transform.position, target.Transform.position);
-                if (dist > weaponRange) continue;
-
-                // Check if target is exposed
-                var los = CombatUtils.CheckLineOfSight(
-                    controller.transform.position,
-                    target.Transform.position
-                );
-
-                if (!los.IsBlocked)
-                {
-                    return target.Transform.gameObject;
-                }
-            }
-
-            return null;
+            return CombatUtils.FindExposedTarget(
+                controller.transform.position,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform
+            );
         }
 
-        /// <summary>
-        /// Find the best target overall (for when watch target is gone).
-        /// </summary>
         private GameObject FindBestTarget()
         {
-            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
-                .OfType<ITargetable>()
-                .ToArray();
-
-            float weaponRange = controller.WeaponRange;
-            float bestPriority = 0f;
-            GameObject bestTarget = null;
-
-            foreach (var target in allTargets)
-            {
-                if (target.Transform == controller.transform) continue;
-                if (target.Team == controller.Team) continue;
-                if (controller.Team == Team.Neutral) continue;
-                if (target.IsDead) continue;
-
-                float priority = CombatUtils.CalculateTargetPriority(
-                    controller.transform.position,
-                    target.Transform.position,
-                    weaponRange
-                );
-
-                if (priority > bestPriority)
-                {
-                    bestPriority = priority;
-                    bestTarget = target.Transform.gameObject;
-                }
-            }
-
-            return bestTarget;
+            return CombatUtils.FindBestTarget(
+                controller.transform.position,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform
+            );
         }
     }
 }

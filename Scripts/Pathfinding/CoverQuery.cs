@@ -21,9 +21,6 @@ namespace Starbelter.Pathfinding
         [Tooltip("Layer mask for cover raycast checks")]
         [SerializeField] private LayerMask coverRaycastMask;
 
-        [Tooltip("Angle tolerance for considering cover 'good' against a threat (degrees)")]
-        [SerializeField] private float coverAngleTolerance = 45f;
-
         private CoverBaker coverBaker;
 
         private void Awake()
@@ -68,23 +65,91 @@ namespace Starbelter.Pathfinding
 
             var candidates = FindCoverCandidates(unitPosition, threatPosition, maxDistance, excludeUnit);
 
-            if (candidates.Count == 0) return null;
+            string unitName = excludeUnit != null ? excludeUnit.name : "Unknown";
+
+            if (candidates.Count == 0)
+            {
+                Debug.Log($"[CoverQuery] {unitName}: No cover candidates found within {maxDistance:F1} tiles");
+                return null;
+            }
 
             // Score each candidate with tactical considerations
             float bestScore = float.MinValue;
             CoverResult? best = null;
+            string bestReason = "";
+
+            // Track top candidates for logging
+            var topCandidates = new List<(CoverResult cover, float score, string breakdown)>();
 
             foreach (var candidate in candidates)
             {
-                float score = ScoreCoverTactically(candidate, unitPosition, threatPosition, searchParams);
+                var (score, breakdown) = ScoreCoverTacticallyWithBreakdown(candidate, unitPosition, threatPosition, searchParams);
+                topCandidates.Add((candidate, score, breakdown));
+
                 if (score > bestScore)
                 {
                     bestScore = score;
                     best = candidate;
+                    bestReason = breakdown;
                 }
             }
 
+            // Log the decision
+            if (best.HasValue)
+            {
+                Vector2 dirToThreat = ((Vector2)(threatPosition - unitPosition)).normalized;
+                Vector2 dirToCover = ((Vector2)(best.Value.WorldPosition - unitPosition)).normalized;
+                float angleFromThreat = Vector2.SignedAngle(dirToThreat, dirToCover);
+
+                // Determine cover type at chosen position
+                string coverTypeStr = "None";
+                Vector2 threatDir = ((Vector2)(threatPosition - best.Value.WorldPosition)).normalized;
+                foreach (var source in best.Value.CoverSources)
+                {
+                    float alignment = Vector2.Dot(source.DirectionToCover, threatDir);
+                    if (alignment > 0.3f)
+                    {
+                        coverTypeStr = source.Type.ToString();
+                        break;
+                    }
+                }
+
+                // Log all cover sources at chosen position
+                var sourcesDebug = new System.Text.StringBuilder();
+                sourcesDebug.Append($"  CoverSources: ");
+                foreach (var src in best.Value.CoverSources)
+                {
+                    float srcAlign = Vector2.Dot(src.DirectionToCover, threatDir);
+                    sourcesDebug.Append($"[{src.Type} dir={src.DirectionToCover} align={srcAlign:F2}] ");
+                }
+
+                Debug.Log($"[CoverQuery] {unitName}: Chose cover at {best.Value.TilePosition} ({coverTypeStr}) " +
+                          $"[{angleFromThreat:F0}° from threat dir] Score={bestScore:F1}\n" +
+                          $"  Breakdown: {bestReason}\n" +
+                          sourcesDebug.ToString());
+
+                // Store debug info for gizmo drawing
+                lastCoverSearchUnit = excludeUnit;
+                lastChosenCover = best.Value.WorldPosition;
+                lastThreatPosition = threatPosition;
+                lastSearchTime = Time.time;
+            }
+
             return best;
+        }
+
+        // Debug visualization data
+        private static GameObject lastCoverSearchUnit;
+        private static Vector3 lastChosenCover;
+        private static Vector3 lastThreatPosition;
+        private static float lastSearchTime;
+
+        /// <summary>
+        /// Get the last cover search result for debug visualization.
+        /// </summary>
+        public static (GameObject unit, Vector3 cover, Vector3 threat, float time) GetLastSearchDebug()
+        {
+            return (lastCoverSearchUnit, lastChosenCover, lastThreatPosition, lastSearchTime);
         }
 
         /// <summary>
@@ -92,92 +157,121 @@ namespace Starbelter.Pathfinding
         /// </summary>
         private float ScoreCoverTactically(CoverResult cover, Vector3 unitPosition, Vector3 threatPosition, CoverSearchParams searchParams)
         {
+            var (score, _) = ScoreCoverTacticallyWithBreakdown(cover, unitPosition, threatPosition, searchParams);
+            return score;
+        }
+
+        /// <summary>
+        /// Score a cover position and return breakdown for debugging.
+        /// </summary>
+        private (float score, string breakdown) ScoreCoverTacticallyWithBreakdown(CoverResult cover, Vector3 unitPosition, Vector3 threatPosition, CoverSearchParams searchParams)
+        {
+            var sb = new System.Text.StringBuilder();
+
             // === ALIGNMENT IS CRITICAL ===
-            // Base score is 0-1 alignment, but we need it to matter a LOT
-            // Cover that doesn't face the threat is nearly useless
             float alignment = cover.Score; // 0-1, how well cover faces threat
 
-            // If alignment is poor (< 0.3), this cover is almost useless against this threat
             if (alignment < 0.3f)
             {
-                return -100f; // Reject poorly aligned cover
+                return (-100f, $"REJECTED: alignment={alignment:F2} < 0.3");
             }
 
-            // Start with alignment as major factor (0-50 points)
-            float score = alignment * 50f;
+            float alignmentScore = alignment * 50f;
+            sb.Append($"align={alignmentScore:F0}");
+
+            float score = alignmentScore;
 
             // === COVER TYPE SCORING ===
-            // Determine best cover type at this position that faces the threat
-            CoverType bestCoverType = CoverType.None;
             Vector2 directionToThreat = ((Vector2)(threatPosition - cover.WorldPosition)).normalized;
+            bool hasFullCover = false;
+            bool hasHalfCover = false;
 
             foreach (var source in cover.CoverSources)
             {
-                // Only count cover that actually faces the threat
                 float sourceAlignment = Vector2.Dot(source.DirectionToCover, directionToThreat);
                 if (sourceAlignment > 0.3f)
                 {
                     if (source.Type == CoverType.Full)
-                        bestCoverType = CoverType.Full;
-                    else if (source.Type == CoverType.Half && bestCoverType != CoverType.Full)
-                        bestCoverType = CoverType.Half;
+                        hasFullCover = true;
+                    else if (source.Type == CoverType.Half)
+                        hasHalfCover = true;
                 }
             }
 
-            // Cover type bonus - but not so large it overrides proximity
-            if (bestCoverType == CoverType.Full)
+            if (!hasFullCover && !hasHalfCover)
             {
-                score += Mathf.Lerp(20f, 10f, searchParams.Aggression);
-            }
-            else if (bestCoverType == CoverType.Half)
-            {
-                score += Mathf.Lerp(10f, 20f, searchParams.Aggression);
-            }
-            else
-            {
-                // No aligned cover at this position
-                return -100f;
+                return (-100f, $"REJECTED: no aligned cover (align={alignment:F2})");
             }
 
-            // === TRAVEL DISTANCE - VERY IMPORTANT ===
-            // Nearby cover is much better - don't run across the battlefield
-            // Each tile of travel is a significant penalty
-            score -= cover.DistanceFromUnit * 8f;
+            float coverTypeScore = 0f;
+            string coverTypeStr = "";
+            if (hasHalfCover)
+            {
+                coverTypeScore = Mathf.Lerp(25f, 35f, searchParams.Aggression);
+                coverTypeStr = "half";
+            }
+            else if (hasFullCover)
+            {
+                coverTypeScore = Mathf.Lerp(20f, 5f, searchParams.Aggression);
+                coverTypeStr = "full";
+            }
+            score += coverTypeScore;
+            sb.Append($", {coverTypeStr}={coverTypeScore:F0}");
+
+            // === TRAVEL DISTANCE ===
+            float travelPenalty = cover.DistanceFromUnit * 8f;
+            score -= travelPenalty;
+            sb.Append($", travel=-{travelPenalty:F0}");
 
             // === RANGE TO THREAT ===
             float distToThreat = Vector3.Distance(cover.WorldPosition, threatPosition);
+            float rangeScore = 0f;
 
-            // Optimal range depends on aggression
             float optimalRangeMin = Mathf.Lerp(searchParams.WeaponRange * 0.6f, searchParams.WeaponRange * 0.3f, searchParams.Aggression);
             float optimalRangeMax = Mathf.Lerp(searchParams.WeaponRange * 0.9f, searchParams.WeaponRange * 0.6f, searchParams.Aggression);
 
             if (distToThreat < searchParams.MinEngageRange)
             {
-                // Too close - penalty
-                score -= (searchParams.MinEngageRange - distToThreat) * 15f;
+                rangeScore = -(searchParams.MinEngageRange - distToThreat) * 15f;
+                sb.Append($", tooClose={rangeScore:F0}");
             }
             else if (distToThreat > searchParams.WeaponRange)
             {
-                // Out of range - heavy penalty
-                score -= (distToThreat - searchParams.WeaponRange) * 20f;
+                rangeScore = -(distToThreat - searchParams.WeaponRange) * 20f;
+                sb.Append($", outOfRange={rangeScore:F0}");
             }
             else if (distToThreat >= optimalRangeMin && distToThreat <= optimalRangeMax)
             {
-                // In optimal range - small bonus
-                score += 10f;
+                rangeScore = 10f;
+                sb.Append($", optRange=+10");
             }
+            score += rangeScore;
 
             // === ENEMY PROXIMITY PENALTY ===
-            // Check for nearby enemies - cover near multiple enemies is dangerous
-            float enemyProximityPenalty = CalculateEnemyProximityPenalty(cover.WorldPosition, searchParams);
-            score -= enemyProximityPenalty;
+            float enemyPenalty = CalculateEnemyProximityPenalty(cover.WorldPosition, searchParams);
+            if (enemyPenalty > 0)
+            {
+                score -= enemyPenalty;
+                sb.Append($", enemyProx=-{enemyPenalty:F0}");
+            }
 
             // === LEADER PROXIMITY BONUS ===
-            // Stay close to squad leader for cohesion
             float leaderBonus = CalculateLeaderProximityBonus(cover.WorldPosition, searchParams);
-            score += leaderBonus;
+            if (leaderBonus != 0)
+            {
+                score += leaderBonus;
+                sb.Append($", leader={leaderBonus:F0}");
+            }
 
-            return score;
+            // === RALLY POINT PROXIMITY BONUS ===
+            float rallyBonus = CalculateRallyPointBonus(cover.WorldPosition, searchParams);
+            if (rallyBonus != 0)
+            {
+                score += rallyBonus;
+                sb.Append($", rally={rallyBonus:F0}");
+            }
+
+            return (score, sb.ToString());
         }
 
         /// <summary>
@@ -211,8 +305,43 @@ namespace Starbelter.Pathfinding
         }
 
         /// <summary>
+        /// Calculate bonus for staying close to the squad rally point.
+        /// This anchors the squad and prevents them from advancing too far.
+        /// Leaders get a MUCH stronger bonus to keep them anchored.
+        /// </summary>
+        private float CalculateRallyPointBonus(Vector3 coverPosition, CoverSearchParams searchParams)
+        {
+            if (!searchParams.RallyPoint.HasValue) return 0f;
+
+            Vector3 rallyPos = searchParams.RallyPoint.Value;
+            float distToRally = Vector3.Distance(coverPosition, rallyPos);
+
+            // Leaders have tighter constraints - they anchor the squad
+            float idealRange = searchParams.IsLeader ? 5f : 8f;
+            float maxRange = searchParams.IsLeader ? 12f : 20f;
+            float maxBonus = searchParams.IsLeader ? 40f : 15f;  // Leaders get big bonus for staying put
+            float overExtendPenalty = searchParams.IsLeader ? 3f : 0.5f;  // Leaders get harsh penalty for wandering
+
+            if (distToRally <= idealRange)
+            {
+                // Near rally point - full bonus
+                return maxBonus;
+            }
+            else if (distToRally <= maxRange)
+            {
+                // Further from rally - scaled bonus
+                float factor = 1f - ((distToRally - idealRange) / (maxRange - idealRange));
+                return maxBonus * factor;
+            }
+
+            // Very far from rally point - penalty to discourage overextending
+            float overExtension = distToRally - maxRange;
+            return -overExtension * overExtendPenalty;
+        }
+
+        /// <summary>
         /// Calculate penalty based on how many enemies are near the cover position.
-        /// Being close to multiple enemies is very dangerous even with cover.
+        /// Only penalize VERY close enemies - we need to be within weapon range to fight.
         /// </summary>
         private float CalculateEnemyProximityPenalty(Vector3 coverPosition, CoverSearchParams searchParams)
         {
@@ -220,8 +349,7 @@ namespace Starbelter.Pathfinding
             if (searchParams.UnitTeam == Team.Neutral) return 0f;
 
             float totalPenalty = 0f;
-            const float dangerRadius = 8f; // Enemies within this range are dangerous
-            const float extremeDangerRadius = 4f; // Enemies this close are extremely dangerous
+            const float extremeDangerRadius = 3f; // Only penalize extremely close enemies
 
             var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
 
@@ -237,16 +365,12 @@ namespace Starbelter.Pathfinding
 
                 if (dist < extremeDangerRadius)
                 {
-                    // Extremely close enemy - massive penalty, almost never go here
-                    totalPenalty += 100f;
+                    // Extremely close enemy - big penalty, don't stand next to them
+                    // Scales from 60 at 0 dist to 0 at 3 dist
+                    float proximityFactor = 1f - (dist / extremeDangerRadius);
+                    totalPenalty += 60f * proximityFactor;
                 }
-                else if (dist < dangerRadius)
-                {
-                    // Nearby enemy - significant penalty that scales with proximity
-                    // At 4 units: 40 penalty, at 8 units: 0 penalty
-                    float proximityFactor = 1f - ((dist - extremeDangerRadius) / (dangerRadius - extremeDangerRadius));
-                    totalPenalty += 40f * proximityFactor;
-                }
+                // No penalty for enemies at normal combat range (3+ tiles)
             }
 
             return totalPenalty;
@@ -286,8 +410,8 @@ namespace Starbelter.Pathfinding
             float distToThreat = Vector2.Distance(position, threatPosition);
 
             // Raycast from position toward threat to find actual cover
-            // Only cover within this radius counts as "ours"
-            const float coverProximityRadius = 1.5f;
+            // Cover must be within 1 unit (adjacent tile) to count as protecting us
+            const float coverProximityRadius = 1.0f;
 
             RaycastHit2D[] hits = Physics2D.RaycastAll(position, directionToThreat, distToThreat);
             System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
@@ -446,8 +570,8 @@ namespace Starbelter.Pathfinding
             float distToThreat = Vector2.Distance(coverPos, threatPos);
 
             // Raycast from candidate position toward threat to find actual cover
-            // Only cover within this radius of the candidate position counts as "ours"
-            const float coverProximityRadius = 1.5f;
+            // Cover must be within 1 unit (adjacent tile) to count as protecting us
+            const float coverProximityRadius = 1.0f;
 
             RaycastHit2D[] hits = Physics2D.RaycastAll(coverPos, directionToThreat, distToThreat);
             System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
@@ -555,11 +679,13 @@ namespace Starbelter.Pathfinding
     /// </summary>
     public struct CoverSearchParams
     {
-        public float WeaponRange;      // Max engagement range
-        public float MinEngageRange;   // Minimum comfortable range (don't get too close)
-        public float Aggression;       // 0-1, affects preferred distance and cover type
-        public Team UnitTeam;          // Team of the unit seeking cover
+        public float WeaponRange;       // Max engagement range
+        public float MinEngageRange;    // Minimum comfortable range (don't get too close)
+        public float Aggression;        // 0-1, affects preferred distance and cover type
+        public Team UnitTeam;           // Team of the unit seeking cover
         public Vector3? LeaderPosition; // Position of squad leader (null if no leader or is leader)
+        public Vector3? RallyPoint;     // Squad rally point - units prefer positions near here
+        public bool IsLeader;           // True if this unit is the squad leader
 
         /// <summary>
         /// Create default parameters (neutral).
@@ -570,13 +696,15 @@ namespace Starbelter.Pathfinding
             MinEngageRange = 4f,
             Aggression = 0.5f,
             UnitTeam = Team.Neutral,
-            LeaderPosition = null
+            LeaderPosition = null,
+            RallyPoint = null,
+            IsLeader = false
         };
 
         /// <summary>
         /// Create from posture and optional bravery (for Neutral posture).
         /// </summary>
-        public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, Team team = Team.Neutral, Vector3? leaderPos = null)
+        public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, Team team = Team.Neutral, Vector3? leaderPos = null, Vector3? rallyPoint = null, bool isLeader = false)
         {
             float aggression = posture switch
             {
@@ -592,7 +720,9 @@ namespace Starbelter.Pathfinding
                 MinEngageRange = 4f,
                 Aggression = aggression,
                 UnitTeam = team,
-                LeaderPosition = leaderPos
+                LeaderPosition = leaderPos,
+                RallyPoint = rallyPoint,
+                IsLeader = isLeader
             };
         }
     }

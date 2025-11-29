@@ -261,7 +261,7 @@ namespace Starbelter.AI
             // Don't react to flanking too frequently - prevents jittering
             if (Time.time - lastFlankResponseTime < FLANK_RESPONSE_COOLDOWN)
             {
-                Debug.Log($"[{name}] OnFlanked: Cooldown active, ignoring ({Time.time - lastFlankResponseTime:F1}s since last)");
+                Debug.Log($"[{name}]  OnFlanked: Cooldown active, ignoring ({Time.time - lastFlankResponseTime:F1}s since last)");
                 return;
             }
             lastFlankResponseTime = Time.time;
@@ -302,6 +302,15 @@ namespace Starbelter.AI
             if (squad == null) return null;
             if (isSquadLeader) return null; // Leader doesn't follow itself
             return squad.GetLeaderPosition();
+        }
+
+        /// <summary>
+        /// Get the squad rally point, or null if no squad.
+        /// </summary>
+        public Vector3? GetRallyPoint()
+        {
+            if (squad == null) return null;
+            return squad.RallyPointPosition;
         }
 
         /// <summary>
@@ -368,6 +377,45 @@ namespace Starbelter.AI
                     transform.position + Vector3.up * 1.5f,
                     $"State: {stateMachine.CurrentStateName}"
                 );
+            }
+
+            // Draw threat directions from ThreatManager
+            if (threatManager != null)
+            {
+                var threats = threatManager.GetActiveThreats(0.5f);
+                foreach (var threat in threats)
+                {
+                    // Red line toward highest threat direction
+                    Gizmos.color = new Color(1f, 0.3f, 0.3f, 0.8f);
+                    Vector3 threatWorldPos = transform.position + new Vector3(threat.Direction.x, threat.Direction.y, 0) * 5f;
+                    Gizmos.DrawLine(transform.position, threatWorldPos);
+
+                    // Arrow head
+                    Vector3 arrowDir = (threatWorldPos - transform.position).normalized;
+                    Vector3 arrowRight = Vector3.Cross(arrowDir, Vector3.forward) * 0.3f;
+                    Gizmos.DrawLine(threatWorldPos, threatWorldPos - arrowDir * 0.5f + arrowRight);
+                    Gizmos.DrawLine(threatWorldPos, threatWorldPos - arrowDir * 0.5f - arrowRight);
+
+                    // Label threat level
+                    UnityEditor.Handles.Label(threatWorldPos + Vector3.up * 0.3f, $"T:{threat.ThreatLevel:F1}");
+                }
+            }
+
+            // Draw last cover search result if it was for this unit
+            var (searchUnit, coverPos, threatPos, searchTime) = CoverQuery.GetLastSearchDebug();
+            if (searchUnit == gameObject && Time.time - searchTime < 3f)
+            {
+                // Green line to chosen cover
+                Gizmos.color = Color.green;
+                Gizmos.DrawLine(transform.position, coverPos);
+                Gizmos.DrawWireCube(coverPos, Vector3.one * 0.6f);
+
+                // Yellow line from cover to threat
+                Gizmos.color = Color.yellow;
+                Gizmos.DrawLine(coverPos, threatPos);
+
+                // Label
+                UnityEditor.Handles.Label(coverPos + Vector3.up * 0.5f, "Chosen Cover");
             }
         }
 #endif

@@ -24,6 +24,10 @@ namespace Starbelter.AI
         [Tooltip("Squad threat above this triggers aggressive suppression")]
         [SerializeField] private float highThreatThreshold = 10f;
 
+        [Header("Rally Point")]
+        [Tooltip("Squad will prefer fighting positions near this point. Defaults to spawn point.")]
+        [SerializeField] private Transform rallyPoint;
+
         private List<UnitController> members = new List<UnitController>();
         private UnitController leader;
 
@@ -35,6 +39,19 @@ namespace Starbelter.AI
         public Team Team => team;
         public IReadOnlyList<UnitController> Members => members;
         public UnitController Leader => leader;
+
+        /// <summary>
+        /// The rally point position. Units prefer cover positions near this point.
+        /// </summary>
+        public Vector3? RallyPointPosition
+        {
+            get
+            {
+                if (rallyPoint != null) return rallyPoint.position;
+                if (spawnPoint != null) return spawnPoint.position;
+                return transform.position;
+            }
+        }
 
         /// <summary>
         /// Gets the combined threat level of all squad members.
@@ -59,6 +76,22 @@ namespace Starbelter.AI
         /// Returns true if the squad is under heavy fire and should prioritize suppression.
         /// </summary>
         public bool IsUnderHeavyFire => SquadThreatLevel > highThreatThreshold;
+
+        /// <summary>
+        /// Gets the number of alive units in the squad.
+        /// </summary>
+        public int GetAliveUnitCount()
+        {
+            int count = 0;
+            foreach (var member in members)
+            {
+                if (member != null && !member.IsDead)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
 
         /// <summary>
         /// Returns true if any squad member has active threats - squad is in combat.

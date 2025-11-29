@@ -117,9 +117,7 @@ namespace Starbelter.AI
 
         private bool IsFlankTargetDead()
         {
-            if (flankTarget == null) return true;
-            var targetable = flankTarget.GetComponent<ITargetable>();
-            return targetable != null && targetable.IsDead;
+            return CombatUtils.IsTargetDead(flankTarget);
         }
 
         private bool ShouldContinueFlanking()
@@ -133,7 +131,8 @@ namespace Starbelter.AI
             // If total threat is very high, abort
             float totalThreat = ThreatManager.GetTotalThreat();
             int bravery = controller.Character?.Bravery ?? 10;
-            float threshold = 3f + (bravery * 0.3f);
+            float threshold = CombatUtils.CalculateThreatThreshold(
+                CombatUtils.FLANK_ABORT_THREAT_BASE, CombatUtils.FLANK_ABORT_BRAVERY_MULT, bravery);
 
             if (totalThreat > threshold) return false;
 

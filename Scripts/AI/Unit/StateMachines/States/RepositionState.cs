@@ -56,12 +56,11 @@ namespace Starbelter.AI
                 if (ThreatManager != null)
                 {
                     int bravery = controller.Character?.Bravery ?? 10;
-                    // High threshold: 30 base + bravery bonus (range 31-50)
-                    float abortThreshold = 30f + (bravery * 1f);
+                    float abortThreshold = CombatUtils.CalculateThreatThreshold(
+                        CombatUtils.REPOSITION_ABORT_THREAT_BASE, CombatUtils.REPOSITION_ABORT_BRAVERY_MULT, bravery);
 
                     if (ThreatManager.GetTotalThreat() > abortThreshold)
                     {
-                        // Too much fire - abort and seek cover
                         Debug.Log($"[{controller.name}] RepositionState: Aborting, threat too high");
                         Movement.Stop();
                         ChangeState<SeekCoverState>();
@@ -85,9 +84,7 @@ namespace Starbelter.AI
 
         private bool IsTargetDead()
         {
-            if (targetAfterArrival == null) return true;
-            var targetable = targetAfterArrival.GetComponent<ITargetable>();
-            return targetable != null && targetable.IsDead;
+            return CombatUtils.IsTargetDead(targetAfterArrival);
         }
     }
 }

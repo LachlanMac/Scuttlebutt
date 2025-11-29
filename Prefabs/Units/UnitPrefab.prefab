@@ -113,7 +113,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Starbelter.AI.UnitMovement
   moveSpeed: 5
-  useRVO: 1
 --- !u!50 &6305561772949558456
 Rigidbody2D:
   serializedVersion: 5
@@ -356,7 +355,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1760250cf5526124484a5d5249094f8a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Combat.ThreatManager
-  decayTime: 10
+  decayTime: 20
   myTeam: 1
   showDebugGizmos: 1
 --- !u!1 &4800437442234653716

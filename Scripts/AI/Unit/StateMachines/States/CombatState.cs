@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Linq;
 using Starbelter.Core;
 using Starbelter.Combat;
 using Starbelter.Pathfinding;
@@ -242,45 +241,53 @@ namespace Starbelter.AI
                 coverCommitTimer -= Time.deltaTime;
             }
 
-            // Check if we're still covered from the main threat direction
+            // Check if we're still covered from active threat directions
             // Threats can change (enemies flank, new shooters)
-            // But only flee if COMPLETELY exposed - half cover is worth staying for
+            // But only flee if COMPLETELY exposed from ALL major threats
             if (ThreatManager != null && ThreatManager.IsUnderFire())
             {
-                // Check cover from the threat direction
                 var coverQuery = Pathfinding.CoverQuery.Instance;
                 if (coverQuery != null)
                 {
-                    var threatDir = ThreatManager.GetHighestThreatDirection();
-                    if (threatDir.HasValue)
+                    // Check cover against all active threats, not just the highest
+                    // This prevents false negatives from threat bucket direction misalignment
+                    var activeThreats = ThreatManager.GetActiveThreats(1f);
+                    bool hasAnyCover = false;
+                    float uncoveredThreat = 0f;
+
+                    foreach (var threat in activeThreats)
                     {
-                        Vector3 threatWorldPos = controller.transform.position +
-                            new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+                        Vector3 threatWorldPos = CombatUtils.ThreatDirectionToWorldPos(
+                            controller.transform.position, threat.Direction);
                         var coverCheck = coverQuery.CheckCoverAt(controller.transform.position, threatWorldPos);
 
-                        // Only consider fleeing if we have NO cover at all
-                        if (!coverCheck.HasCover)
+                        if (coverCheck.HasCover)
                         {
-                            // Calculate threat threshold based on bravery and commit status
-                            int bravery = controller.Character?.Bravery ?? 10;
-                            // Base threshold: 20 + bravery bonus (range 21-40)
-                            float baseThreatThreshold = 20f + (bravery * 1f);
-
-                            // If we just repositioned, require much higher threat to move again
-                            float threatMultiplier = coverCommitTimer > 0f ? 2f : 1f;
-                            float requiredThreat = baseThreatThreshold * threatMultiplier;
-
-                            float currentThreat = ThreatManager.GetTotalThreat();
-
-                            if (currentThreat > requiredThreat)
-                            {
-                                // Completely exposed with high threat - reposition!
-                                Debug.Log($"[{controller.name}] CombatState: No cover, high threat ({currentThreat:F1} > {requiredThreat:F1}), seeking cover");
-                                ChangeState<SeekCoverState>();
-                                return;
-                            }
+                            hasAnyCover = true;
                         }
-                        // If we have ANY cover (half or full), stay and fight
+                        else
+                        {
+                            uncoveredThreat += threat.ThreatLevel;
+                        }
+                    }
+
+                    // Only consider fleeing if we have NO cover from ANY direction AND high uncovered threat
+                    if (!hasAnyCover && uncoveredThreat > 0f)
+                    {
+                        int bravery = controller.Character?.Bravery ?? 10;
+                        float baseThreatThreshold = CombatUtils.CalculateThreatThreshold(
+                            CombatUtils.FLEE_THREAT_BASE, CombatUtils.FLEE_THREAT_BRAVERY_MULT, bravery);
+
+                        // If we just repositioned, require much higher threat to move again
+                        float threatMultiplier = coverCommitTimer > 0f ? 2f : 1f;
+                        float requiredThreat = baseThreatThreshold * threatMultiplier;
+
+                        if (uncoveredThreat > requiredThreat)
+                        {
+                            Debug.Log($"[{controller.name}] CombatState: No cover from any threat ({uncoveredThreat:F1} > {requiredThreat:F1}), seeking cover");
+                            ChangeState<SeekCoverState>();
+                            return;
+                        }
                     }
                 }
             }
@@ -323,6 +330,17 @@ namespace Starbelter.AI
 
             // Check if it's safe to flank
             bool shouldFlank = CombatUtils.ShouldAttemptFlank(ThreatManager, bravery);
+
+            // Leaders should NOT flank unless squad is very small (< 3 alive)
+            // They need to anchor the squad position
+            if (controller.IsSquadLeader && controller.Squad != null)
+            {
+                int aliveCount = controller.Squad.GetAliveUnitCount();
+                if (aliveCount >= 3)
+                {
+                    shouldFlank = false;
+                }
+            }
 
             if (shouldFlank && currentTarget != null)
             {
@@ -508,7 +526,9 @@ namespace Starbelter.AI
             // Build tactical search parameters from posture
             int bravery = controller.Character?.Bravery ?? 10;
             var leaderPos = controller.GetLeaderPosition();
-            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos);
+            var rallyPoint = controller.GetRallyPoint();
+            bool isLeader = controller.IsSquadLeader;
+            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos, rallyPoint, isLeader);
 
             // Limit cover search radius based on health
             // Healthy units stay close and fight, hurt units can retreat further
@@ -555,58 +575,21 @@ namespace Starbelter.AI
 
         private void FindTarget()
         {
-            // Find best enemy target using priority scoring
-            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
-                .OfType<ITargetable>()
-                .ToArray();
+            var (target, priority) = CombatUtils.FindBestTargetWithPriority(
+                controller.transform.position,
+                controller.WeaponRange,
+                controller.Team,
+                controller.transform,
+                ThreatManager
+            );
 
-            float weaponRange = controller.WeaponRange;
-            float bestPriority = 0f;
-            GameObject bestTarget = null;
-
-            foreach (var target in allTargets)
-            {
-                // Skip self
-                if (target.Transform == controller.transform) continue;
-
-                // Skip same team (and neutrals don't fight)
-                if (target.Team == controller.Team) continue;
-                if (controller.Team == Team.Neutral) continue;
-
-                // Skip dead targets
-                if (target.IsDead) continue;
-
-                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
-
-                // Register visible enemies within weapon range as threats
-                if (distance <= weaponRange && ThreatManager != null)
-                {
-                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
-                }
-
-                // Calculate priority based on distance and cover
-                float priority = CombatUtils.CalculateTargetPriority(
-                    controller.transform.position,
-                    target.Transform.position,
-                    weaponRange
-                );
-
-                if (priority > bestPriority)
-                {
-                    bestPriority = priority;
-                    bestTarget = target.Transform.gameObject;
-                }
-            }
-
-            currentTarget = bestTarget;
-            currentTargetPriority = bestPriority;
+            currentTarget = target;
+            currentTargetPriority = priority;
         }
 
         private bool IsTargetDead()
         {
-            if (currentTarget == null) return true;
-            var targetable = currentTarget.GetComponent<ITargetable>();
-            return targetable != null && targetable.IsDead;
+            return CombatUtils.IsTargetDead(currentTarget);
         }
 
         private void FireAtTarget()
@@ -614,51 +597,19 @@ namespace Starbelter.AI
             if (currentTarget == null) return;
             if (controller.ProjectilePrefab == null) return;
 
-            // Determine fire position
-            Vector3 firePos = controller.FirePoint != null
-                ? controller.FirePoint.position
-                : controller.transform.position;
+            int accuracy = controller.Character?.Accuracy ?? 10;
 
-            // Calculate direction to target (with accuracy spread)
-            Vector3 targetPos = currentTarget.transform.position;
-            Vector2 baseDirection = (targetPos - firePos).normalized;
-
-            // Apply accuracy spread
-            float spread = CalculateSpread();
-            float angle = Mathf.Atan2(baseDirection.y, baseDirection.x);
-            angle += Random.Range(-spread, spread);
-            Vector2 finalDirection = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-
-            // Spawn and fire projectile
-            GameObject projectileObj = Object.Instantiate(controller.ProjectilePrefab, firePos, Quaternion.identity);
-            Projectile projectile = projectileObj.GetComponent<Projectile>();
-
-            if (projectile != null)
+            var shootParams = new CombatUtils.ShootParams
             {
-                projectile.Fire(finalDirection, controller.Team, controller.gameObject);
-            }
-            else
-            {
-                Object.Destroy(projectileObj);
-            }
-        }
+                FirePosition = controller.FirePosition,
+                TargetPosition = currentTarget.transform.position,
+                SpreadRadians = CombatUtils.CalculateAccuracySpread(accuracy),
+                Team = controller.Team,
+                SourceUnit = controller.gameObject,
+                ProjectilePrefab = controller.ProjectilePrefab
+            };
 
-        /// <summary>
-        /// Calculate spread angle in radians based on accuracy stat.
-        /// </summary>
-        private float CalculateSpread()
-        {
-            // Base spread of ~5 degrees, accuracy reduces it
-            float baseSpread = 5f * Mathf.Deg2Rad;
-
-            if (controller.Character != null)
-            {
-                // High accuracy (20) = nearly no spread, low accuracy (1) = high spread
-                float accuracyMult = 1f - Character.StatToMultiplier(controller.Character.Accuracy);
-                return baseSpread * (0.2f + accuracyMult * 1.5f); // 0.2x to 1.7x spread
-            }
-
-            return baseSpread;
+            CombatUtils.ShootProjectile(shootParams);
         }
 
         #endregion

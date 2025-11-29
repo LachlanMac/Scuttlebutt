@@ -1,4 +1,6 @@
 using UnityEngine;
+using System.Collections.Generic;
+using System.Linq;
 using Starbelter.Core;
 using Starbelter.Pathfinding;
 
@@ -9,6 +11,312 @@ namespace Starbelter.Combat
     /// </summary>
     public static class CombatUtils
     {
+        #region Threat Threshold Constants
+
+        /// <summary>
+        /// Base threat threshold for fleeing combat (used when completely exposed).
+        /// Formula: BASE + (bravery * BRAVERY_MULTIPLIER)
+        /// </summary>
+        public const float FLEE_THREAT_BASE = 20f;
+        public const float FLEE_THREAT_BRAVERY_MULT = 1f;
+
+        /// <summary>
+        /// Base threat threshold for aborting a reposition (higher - committed to move).
+        /// Formula: BASE + (bravery * BRAVERY_MULTIPLIER)
+        /// </summary>
+        public const float REPOSITION_ABORT_THREAT_BASE = 30f;
+        public const float REPOSITION_ABORT_BRAVERY_MULT = 1f;
+
+        /// <summary>
+        /// Base threat threshold for aborting a flank (lower - flanking is risky).
+        /// Formula: BASE + (bravery * BRAVERY_MULTIPLIER)
+        /// </summary>
+        public const float FLANK_ABORT_THREAT_BASE = 3f;
+        public const float FLANK_ABORT_BRAVERY_MULT = 0.3f;
+
+        /// <summary>
+        /// Base threat threshold for deciding whether to attempt a flank.
+        /// Formula: BASE + (bravery * BRAVERY_MULTIPLIER)
+        /// </summary>
+        public const float FLANK_ATTEMPT_THREAT_BASE = 5f;
+        public const float FLANK_ATTEMPT_BRAVERY_MULT = 0.5f;
+
+        /// <summary>
+        /// Threat threshold for exiting suppression state.
+        /// </summary>
+        public const float SUPPRESSION_ABORT_THREAT = 30f;
+
+        /// <summary>
+        /// Calculate threat threshold based on bravery and base values.
+        /// </summary>
+        public static float CalculateThreatThreshold(float baseThreshold, float braveryMultiplier, int bravery)
+        {
+            return baseThreshold + (bravery * braveryMultiplier);
+        }
+
+        #endregion
+
+        #region Projectile Shooting
+
+        /// <summary>
+        /// Parameters for shooting a projectile.
+        /// </summary>
+        public struct ShootParams
+        {
+            public Vector3 FirePosition;
+            public Vector2 TargetPosition;
+            public float SpreadRadians;
+            public Team Team;
+            public GameObject SourceUnit;
+            public GameObject ProjectilePrefab;
+        }
+
+        /// <summary>
+        /// Fire a projectile from fire position toward target with specified spread.
+        /// Handles direction calculation, spread, instantiation, and firing.
+        /// </summary>
+        /// <returns>The fired projectile, or null if spawn failed</returns>
+        public static Projectile ShootProjectile(ShootParams shootParams)
+        {
+            if (shootParams.ProjectilePrefab == null) return null;
+
+            Vector2 baseDirection = (shootParams.TargetPosition - (Vector2)shootParams.FirePosition).normalized;
+
+            // Apply spread
+            float angle = Mathf.Atan2(baseDirection.y, baseDirection.x);
+            angle += Random.Range(-shootParams.SpreadRadians, shootParams.SpreadRadians);
+            Vector2 finalDirection = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+
+            // Spawn projectile
+            GameObject projectileObj = Object.Instantiate(
+                shootParams.ProjectilePrefab,
+                shootParams.FirePosition,
+                Quaternion.identity
+            );
+
+            var projectile = projectileObj.GetComponent<Projectile>();
+            if (projectile != null)
+            {
+                projectile.Fire(finalDirection, shootParams.Team, shootParams.SourceUnit);
+                return projectile;
+            }
+            else
+            {
+                Object.Destroy(projectileObj);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Calculate spread angle in radians based on accuracy stat.
+        /// Base spread of ~5 degrees, accuracy reduces it.
+        /// </summary>
+        /// <param name="accuracy">Accuracy stat (1-20)</param>
+        /// <returns>Spread in radians</returns>
+        public static float CalculateAccuracySpread(int accuracy)
+        {
+            float baseSpread = 5f * Mathf.Deg2Rad;
+            float accuracyMult = 1f - Character.StatToMultiplier(accuracy);
+            return baseSpread * (0.2f + accuracyMult * 1.5f); // 0.2x to 1.7x spread
+        }
+
+        #endregion
+
+        #region Target Finding Utilities
+
+        /// <summary>
+        /// Scan for enemies and register them as threats with the threat manager.
+        /// Does not return anything - just registers visible enemies.
+        /// </summary>
+        public static void ScanAndRegisterThreats(
+            Vector2 unitPos,
+            float weaponRange,
+            Team myTeam,
+            Transform excludeTransform,
+            ThreatManager threatManager)
+        {
+            if (threatManager == null || myTeam == Team.Neutral) return;
+
+            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
+                .OfType<ITargetable>()
+                .ToArray();
+
+            foreach (var target in allTargets)
+            {
+                if (excludeTransform != null && target.Transform == excludeTransform) continue;
+                if (target.Team == myTeam) continue;
+                if (target.Team == Team.Neutral) continue;
+                if (target.IsDead) continue;
+
+                float distance = Vector2.Distance(unitPos, target.Transform.position);
+                if (distance <= weaponRange)
+                {
+                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Check if a target GameObject is dead or invalid.
+        /// </summary>
+        public static bool IsTargetDead(GameObject target)
+        {
+            if (target == null) return true;
+            if (!target.activeInHierarchy) return true;
+            var targetable = target.GetComponent<ITargetable>();
+            return targetable != null && targetable.IsDead;
+        }
+
+        /// <summary>
+        /// Convert a threat direction to a world position for cover calculations.
+        /// </summary>
+        public static Vector3 ThreatDirectionToWorldPos(Vector3 unitPos, Vector2 threatDirection, float distance = 10f)
+        {
+            return unitPos + new Vector3(threatDirection.x, threatDirection.y, 0) * distance;
+        }
+
+        /// <summary>
+        /// Find the best enemy target based on priority scoring.
+        /// </summary>
+        /// <param name="attackerPos">Position of the attacker</param>
+        /// <param name="weaponRange">Maximum weapon range</param>
+        /// <param name="myTeam">Attacker's team</param>
+        /// <param name="excludeTransform">Transform to exclude (usually self)</param>
+        /// <param name="threatManager">Optional threat manager to register visible enemies</param>
+        /// <returns>Best target GameObject, or null if none found</returns>
+        public static GameObject FindBestTarget(
+            Vector2 attackerPos,
+            float weaponRange,
+            Team myTeam,
+            Transform excludeTransform = null,
+            ThreatManager threatManager = null)
+        {
+            if (myTeam == Team.Neutral) return null;
+
+            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
+                .OfType<ITargetable>()
+                .ToArray();
+
+            float bestPriority = 0f;
+            GameObject bestTarget = null;
+
+            foreach (var target in allTargets)
+            {
+                if (excludeTransform != null && target.Transform == excludeTransform) continue;
+                if (target.Team == myTeam) continue;
+                if (target.Team == Team.Neutral) continue;
+                if (target.IsDead) continue;
+
+                float distance = Vector2.Distance(attackerPos, target.Transform.position);
+
+                // Register visible enemies within weapon range as threats
+                if (distance <= weaponRange && threatManager != null)
+                {
+                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
+
+                float priority = CalculateTargetPriority(attackerPos, target.Transform.position, weaponRange);
+
+                if (priority > bestPriority)
+                {
+                    bestPriority = priority;
+                    bestTarget = target.Transform.gameObject;
+                }
+            }
+
+            return bestTarget;
+        }
+
+        /// <summary>
+        /// Find the best enemy target and return both target and priority.
+        /// </summary>
+        public static (GameObject target, float priority) FindBestTargetWithPriority(
+            Vector2 attackerPos,
+            float weaponRange,
+            Team myTeam,
+            Transform excludeTransform = null,
+            ThreatManager threatManager = null)
+        {
+            if (myTeam == Team.Neutral) return (null, 0f);
+
+            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
+                .OfType<ITargetable>()
+                .ToArray();
+
+            float bestPriority = 0f;
+            GameObject bestTarget = null;
+
+            foreach (var target in allTargets)
+            {
+                if (excludeTransform != null && target.Transform == excludeTransform) continue;
+                if (target.Team == myTeam) continue;
+                if (target.Team == Team.Neutral) continue;
+                if (target.IsDead) continue;
+
+                float distance = Vector2.Distance(attackerPos, target.Transform.position);
+
+                if (distance <= weaponRange && threatManager != null)
+                {
+                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
+
+                float priority = CalculateTargetPriority(attackerPos, target.Transform.position, weaponRange);
+
+                if (priority > bestPriority)
+                {
+                    bestPriority = priority;
+                    bestTarget = target.Transform.gameObject;
+                }
+            }
+
+            return (bestTarget, bestPriority);
+        }
+
+        /// <summary>
+        /// Find an exposed enemy target (not in full cover).
+        /// </summary>
+        /// <param name="attackerPos">Position of the attacker (use FirePosition for accuracy)</param>
+        /// <param name="weaponRange">Maximum weapon range</param>
+        /// <param name="myTeam">Attacker's team</param>
+        /// <param name="excludeTransform">Transform to exclude (usually self)</param>
+        /// <param name="excludeTarget">Additional target to exclude (e.g., current suppress target)</param>
+        /// <returns>Exposed target GameObject, or null if none found</returns>
+        public static GameObject FindExposedTarget(
+            Vector2 attackerPos,
+            float weaponRange,
+            Team myTeam,
+            Transform excludeTransform = null,
+            GameObject excludeTarget = null)
+        {
+            if (myTeam == Team.Neutral) return null;
+
+            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
+                .OfType<ITargetable>()
+                .ToArray();
+
+            foreach (var target in allTargets)
+            {
+                if (excludeTransform != null && target.Transform == excludeTransform) continue;
+                if (target.Team == myTeam) continue;
+                if (target.Team == Team.Neutral) continue;
+                if (target.IsDead) continue;
+                if (excludeTarget != null && target.Transform.gameObject == excludeTarget) continue;
+
+                float dist = Vector2.Distance(attackerPos, target.Transform.position);
+                if (dist > weaponRange) continue;
+
+                var los = CheckLineOfSight(attackerPos, target.Transform.position);
+                if (!los.IsBlocked)
+                {
+                    return target.Transform.gameObject;
+                }
+            }
+
+            return null;
+        }
+
+        #endregion
+
         /// <summary>
         /// Result of a line-of-sight check between attacker and target.
         /// </summary>
@@ -406,7 +714,8 @@ namespace Starbelter.Combat
 
             // High total threat = too dangerous (unless very brave)
             float totalThreat = threatManager.GetTotalThreat();
-            float braveryThreshold = 5f + (bravery * 0.5f); // 5.5 to 15 based on bravery
+            float braveryThreshold = CalculateThreatThreshold(
+                FLANK_ATTEMPT_THREAT_BASE, FLANK_ATTEMPT_BRAVERY_MULT, bravery);
 
             if (totalThreat > braveryThreshold) return false;
 
@@ -430,7 +739,9 @@ namespace Starbelter.Combat
             float weaponRange,
             Pathfinding.CoverQuery coverQuery,
             GameObject excludeUnit = null,
-            Team unitTeam = Team.Neutral)
+            Team unitTeam = Team.Neutral,
+            Vector3? rallyPoint = null,
+            bool isLeader = false)
         {
             var result = new FightingPositionResult
             {
@@ -543,6 +854,31 @@ namespace Starbelter.Combat
                 // Prefer closer positions (less travel time)
                 float travelDist = Vector2.Distance(unitPos, candidatePos);
                 positionScore -= travelDist * 5f;
+
+                // Rally point scoring - keep units anchored, especially leaders
+                if (rallyPoint.HasValue)
+                {
+                    float distToRally = Vector3.Distance(candidatePos, rallyPoint.Value);
+                    float idealRange = isLeader ? 5f : 8f;
+                    float maxRange = isLeader ? 12f : 20f;
+                    float maxBonus = isLeader ? 40f : 15f;
+                    float overExtendPenalty = isLeader ? 3f : 0.5f;
+
+                    if (distToRally <= idealRange)
+                    {
+                        positionScore += maxBonus;
+                    }
+                    else if (distToRally <= maxRange)
+                    {
+                        float factor = 1f - ((distToRally - idealRange) / (maxRange - idealRange));
+                        positionScore += maxBonus * factor;
+                    }
+                    else
+                    {
+                        float overExtension = distToRally - maxRange;
+                        positionScore -= overExtension * overExtendPenalty;
+                    }
+                }
 
                 if (positionScore > bestScore)
                 {

@@ -18,7 +18,7 @@ namespace Starbelter.Combat
 
         [Header("Settings")]
         [Tooltip("Time in seconds for threat to decay from max to zero")]
-        [SerializeField] private float decayTime = 10f;
+        [SerializeField] private float decayTime = 20f;
 
         [Tooltip("This unit's team - ignores projectiles from same team")]
         [SerializeField] private Team myTeam = Team.Ally;

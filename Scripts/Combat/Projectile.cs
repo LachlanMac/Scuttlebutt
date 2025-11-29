@@ -28,7 +28,7 @@ namespace Starbelter.Combat
 
         [Header("Cover")]
         [Tooltip("Cover only blocks if an enemy is within this distance of it")]
-        [SerializeField] private float coverEffectiveRadius = 2f;
+        [SerializeField] private float coverEffectiveRadius = 2.5f;
 
         private Rigidbody2D rb;
         private Vector2 direction;
@@ -170,6 +170,9 @@ namespace Starbelter.Combat
 
             foreach (var col in colliders)
             {
+                // Skip ThreatDetector/ThreatManager colliders - they're huge detection zones, not units
+                if (col.GetComponent<ThreatManager>() != null) continue;
+
                 var targetable = col.GetComponentInParent<ITargetable>();
                 if (targetable != null && targetable.Team != sourceTeam && !targetable.IsDead)
                 {
