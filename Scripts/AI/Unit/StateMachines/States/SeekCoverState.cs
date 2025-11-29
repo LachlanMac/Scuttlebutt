@@ -10,7 +10,9 @@ namespace Starbelter.AI
     {
         private bool hasCoverTarget;
         private float searchCooldown;
-        private const float SEARCH_INTERVAL = 0.5f; // Re-evaluate cover every 0.5s
+        private float giveUpTimer;
+        private const float SEARCH_INTERVAL = 0.5f;
+        private const float GIVE_UP_TIME = 2f;
 
         // Optional: specific direction to seek cover from (used when flanked)
         private Vector2? overrideThreatDirection;
@@ -35,17 +37,33 @@ namespace Starbelter.AI
         {
             hasCoverTarget = false;
             searchCooldown = 0f;
-            FindAndMoveToCover();
+            giveUpTimer = GIVE_UP_TIME;
+
+            // If already moving to cover, just wait for arrival
+            if (Movement.IsMoving)
+            {
+                hasCoverTarget = true;
+                return;
+            }
+
+            // Try to find and move to cover
+            bool startedMoving = FindAndMoveToCover();
+
+            // If we didn't start moving, we're probably already at cover
+            if (!startedMoving && controller.IsInCover)
+            {
+                var combatState = new CombatState(alreadyAtCover: true);
+                stateMachine.ChangeState(combatState);
+            }
         }
 
         public override void Update()
         {
-            // If we've arrived at cover, transition to a cover state
+            // If we've arrived at cover, transition to combat
             if (hasCoverTarget && !Movement.IsMoving)
             {
-                // TODO: Transition to InCoverState when implemented
-                // For now, go back to idle
-                ChangeState<IdleState>();
+                var combatState = new CombatState(alreadyAtCover: true);
+                stateMachine.ChangeState(combatState);
                 return;
             }
 
@@ -55,21 +73,35 @@ namespace Starbelter.AI
             {
                 searchCooldown = SEARCH_INTERVAL;
 
-                // If threat direction changed significantly, find new cover
-                if (ShouldReevaluateCover())
+                // Try to find cover if we don't have a target yet
+                if (!hasCoverTarget)
+                {
+                    FindAndMoveToCover();
+                }
+                // Or if threat direction changed significantly
+                else if (ShouldReevaluateCover())
                 {
                     FindAndMoveToCover();
                 }
             }
 
-            // If no longer under fire and not moving to cover, return to idle
-            if (!hasCoverTarget && ThreatManager != null && !ThreatManager.IsUnderFire())
+            // Give up timer - don't immediately bail, wait for path throttle to clear
+            if (!hasCoverTarget)
             {
-                ChangeState<IdleState>();
+                giveUpTimer -= Time.deltaTime;
+                if (giveUpTimer <= 0f)
+                {
+                    // Couldn't find cover after waiting, go to combat anyway (fight in the open)
+                    var combatState = new CombatState(alreadyAtCover: true); // Prevent re-seeking
+                    stateMachine.ChangeState(combatState);
+                }
             }
         }
 
-        private void FindAndMoveToCover()
+        /// <summary>
+        /// Find and move to cover. Returns true if movement was started.
+        /// </summary>
+        private bool FindAndMoveToCover()
         {
             // Use override direction if set (flanking), otherwise get from ThreatManager
             Vector2? threatDir = overrideThreatDirection;
@@ -79,14 +111,14 @@ namespace Starbelter.AI
                 if (ThreatManager == null)
                 {
                     hasCoverTarget = false;
-                    return;
+                    return false;
                 }
 
                 threatDir = ThreatManager.GetHighestThreatDirection();
                 if (!threatDir.HasValue)
                 {
                     hasCoverTarget = false;
-                    return;
+                    return false;
                 }
             }
 
@@ -100,21 +132,26 @@ namespace Starbelter.AI
             {
                 Debug.LogWarning("[SeekCoverState] CoverQuery not available");
                 hasCoverTarget = false;
-                return;
+                return false;
             }
 
-            var coverResult = coverQuery.FindBestCover(unitPos, threatWorldPos);
+            // Use tactical search with posture
+            int bravery = controller.Character?.Bravery ?? 10;
+            var leaderPos = controller.GetLeaderPosition();
+            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos);
+
+            var coverResult = coverQuery.FindBestCover(unitPos, threatWorldPos, searchParams, -1f, controller.gameObject);
 
             if (coverResult.HasValue)
             {
-                Movement.MoveToTile(coverResult.Value.TilePosition);
-                hasCoverTarget = true;
-                Debug.Log($"[SeekCoverState] {controller.name} seeking cover at {coverResult.Value.TilePosition} from threat {threatDir.Value}");
+                // Only set hasCoverTarget if movement actually started
+                hasCoverTarget = Movement.MoveToTile(coverResult.Value.TilePosition);
+                return hasCoverTarget;
             }
             else
             {
-                Debug.LogWarning($"[SeekCoverState] {controller.name} found no cover from threat {threatDir.Value}");
                 hasCoverTarget = false;
+                return false;
             }
         }
 

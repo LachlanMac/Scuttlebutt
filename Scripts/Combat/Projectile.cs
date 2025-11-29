@@ -1,6 +1,7 @@
 using UnityEngine;
 using Starbelter.Core;
 using Starbelter.Pathfinding;
+using Starbelter.AI;
 
 namespace Starbelter.Combat
 {
@@ -25,9 +26,9 @@ namespace Starbelter.Combat
         [Header("Team")]
         [SerializeField] private Team sourceTeam = Team.Neutral;
 
-        [Header("Cover Ignore")]
-        [Tooltip("Projectile ignores structures within this distance of spawn point")]
-        [SerializeField] private float ignoreStructureRadius = 1.5f;
+        [Header("Cover")]
+        [Tooltip("Cover only blocks if an enemy is within this distance of it")]
+        [SerializeField] private float coverEffectiveRadius = 2f;
 
         private Rigidbody2D rb;
         private Vector2 direction;
@@ -89,26 +90,25 @@ namespace Starbelter.Combat
             var structure = other.GetComponent<Structure>();
             if (structure != null)
             {
-                // Ignore HALF cover close to spawn point (shooter peeking over their cover)
-                // Full cover always blocks, even at close range
-                float distFromOrigin = Vector2.Distance(origin, transform.position);
-                if (distFromOrigin < ignoreStructureRadius && structure.CoverType == CoverType.Half)
+                // Cover only matters if an enemy is using it (standing near it)
+                // This handles: shooter's own cover, no-man's-land cover, and defender's cover
+                if (!IsEnemyNearCover(structure.transform.position))
                 {
-                    return; // Pass through half cover - too close to shooter
+                    return; // No enemy using this cover - pass through
                 }
 
-                // Ask structure if we're blocked
+                // Apply suppression to enemies near this cover
+                ApplySuppressionNearCover(structure.transform.position);
+
+                // Enemy is using this cover - let structure decide if it blocks
                 if (structure.TryBlockProjectile(this))
                 {
-                    // Blocked - spawn hit effect and destroy projectile
-                    Debug.Log($"[Projectile] Blocked by structure {structure.name} ({structure.CoverType}) at {transform.position}, origin was {origin}");
                     if (hitEffectPrefab != null)
                     {
                         Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
                     }
                     Destroy(gameObject);
                 }
-                // Not blocked - continue through (half cover has % chance)
                 return;
             }
 
@@ -155,6 +155,42 @@ namespace Starbelter.Combat
 
             // Override in subclasses for specific hit behavior
             Destroy(gameObject);
+        }
+
+        /// <summary>
+        /// Check if any enemy unit is near this cover position (actually using it).
+        /// </summary>
+        private bool IsEnemyNearCover(Vector2 coverPosition)
+        {
+            var colliders = Physics2D.OverlapCircleAll(coverPosition, coverEffectiveRadius);
+
+            foreach (var col in colliders)
+            {
+                var targetable = col.GetComponentInParent<ITargetable>();
+                if (targetable != null && targetable.Team != sourceTeam && !targetable.IsDead)
+                {
+                    return true; // Enemy is using this cover
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Apply suppression to any enemy units near this cover.
+        /// </summary>
+        private void ApplySuppressionNearCover(Vector2 coverPosition)
+        {
+            var colliders = Physics2D.OverlapCircleAll(coverPosition, coverEffectiveRadius);
+
+            foreach (var col in colliders)
+            {
+                var unitController = col.GetComponentInParent<AI.UnitController>();
+                if (unitController != null && unitController.Team != sourceTeam)
+                {
+                    unitController.ApplySuppression();
+                }
+            }
         }
     }
 }

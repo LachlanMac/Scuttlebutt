@@ -48,6 +48,14 @@ namespace Starbelter.AI
         private bool immediateShot;
         private GameObject overwatchTarget;
 
+        // If true, assume we're already at cover (coming from SeekCoverState)
+        private bool arrivedAtCover;
+
+        // Track if we've started moving to cover (for retry logic)
+        private bool startedMovingToCover;
+        private float seekCoverRetryTimer;
+        private const float SEEK_COVER_RETRY_INTERVAL = 0.5f;
+
         public CombatPhase CurrentPhase => currentPhase;
 
         /// <summary>
@@ -57,6 +65,7 @@ namespace Starbelter.AI
         {
             immediateShot = false;
             overwatchTarget = null;
+            arrivedAtCover = false;
         }
 
         /// <summary>
@@ -66,18 +75,26 @@ namespace Starbelter.AI
         {
             immediateShot = true;
             overwatchTarget = target;
+            arrivedAtCover = false;
+        }
+
+        /// <summary>
+        /// Constructor for when arriving from SeekCoverState - skip seeking cover.
+        /// </summary>
+        public CombatState(bool alreadyAtCover)
+        {
+            immediateShot = false;
+            overwatchTarget = null;
+            arrivedAtCover = alreadyAtCover;
         }
 
         public override void Enter()
         {
-            Debug.Log($"[CombatState] {controller.name} entering. Unit at {(Vector2)controller.transform.position}, fire pos at {(Vector2)controller.FirePosition}, immediateShot={immediateShot}");
-
             if (immediateShot && overwatchTarget != null)
             {
                 // Coming from Overwatch/Flank - shoot immediately from current position
                 currentTarget = overwatchTarget;
                 currentTargetPriority = 1f;
-                Debug.Log($"[CombatState] {controller.name} immediate shot at {overwatchTarget.name}");
                 StartPhase(CombatPhase.Shooting);
                 return;
             }
@@ -86,14 +103,15 @@ namespace Starbelter.AI
             FindTarget();
 
             // Start by seeking cover if not already in cover
-            if (controller.IsInCover)
+            if (arrivedAtCover || controller.IsInCover)
             {
                 StartPhase(CombatPhase.InCover);
             }
             else
             {
                 StartPhase(CombatPhase.SeekingCover);
-                SeekCover();
+                startedMovingToCover = SeekCover();
+                seekCoverRetryTimer = SEEK_COVER_RETRY_INTERVAL;
             }
         }
 
@@ -106,7 +124,7 @@ namespace Starbelter.AI
             }
 
             // Check if target is still valid
-            if (currentTarget == null || !currentTarget.activeInHierarchy)
+            if (currentTarget == null || !currentTarget.activeInHierarchy || IsTargetDead())
             {
                 FindTarget();
                 if (currentTarget == null)
@@ -159,10 +177,38 @@ namespace Starbelter.AI
 
         private void UpdateSeekingCover()
         {
+            // If we haven't started moving yet (path was throttled), retry
+            if (!startedMovingToCover && !Movement.IsMoving)
+            {
+                seekCoverRetryTimer -= Time.deltaTime;
+                if (seekCoverRetryTimer <= 0f)
+                {
+                    seekCoverRetryTimer = SEEK_COVER_RETRY_INTERVAL;
+                    startedMovingToCover = SeekCover();
+                }
+                return;
+            }
+
             // Wait until we've arrived at cover
             if (!Movement.IsMoving)
             {
-                if (controller.IsInCover)
+                // Check if we have cover from threat, or from target if no threat yet
+                bool hasCover = controller.IsInCover;
+                if (!hasCover && currentTarget != null)
+                {
+                    // No threat registered yet - check cover from target direction
+                    var coverQuery = CoverQuery.Instance;
+                    if (coverQuery != null)
+                    {
+                        var coverCheck = coverQuery.CheckCoverAt(
+                            controller.transform.position,
+                            currentTarget.transform.position
+                        );
+                        hasCover = coverCheck.HasCover;
+                    }
+                }
+
+                if (hasCover)
                 {
                     StartPhase(CombatPhase.InCover);
                 }
@@ -195,7 +241,7 @@ namespace Starbelter.AI
                     if (currentTarget == null || currentTargetPriority < FULL_COVER_THRESHOLD)
                     {
                         // No good targets - decide: Flank or Overwatch?
-                        DecideFlankOrOverwatch();
+                        DecideNextTactic();
                         return;
                     }
                 }
@@ -206,9 +252,9 @@ namespace Starbelter.AI
         }
 
         /// <summary>
-        /// Decide whether to flank or overwatch based on threat level and bravery.
+        /// Decide whether to flank, suppress, or overwatch based on threat level and bravery.
         /// </summary>
-        private void DecideFlankOrOverwatch()
+        private void DecideNextTactic()
         {
             int bravery = controller.Character?.Bravery ?? 10;
 
@@ -217,28 +263,63 @@ namespace Starbelter.AI
 
             if (shouldFlank && currentTarget != null)
             {
-                // Try to find a flank position
+                // Try to find a flank position (exclude self from occupancy check)
                 var flankResult = CombatUtils.FindFlankPosition(
                     controller.transform.position,
                     currentTarget.transform.position,
                     controller.WeaponRange,
-                    CoverQuery.Instance
+                    CoverQuery.Instance,
+                    controller.gameObject,
+                    controller.Team
                 );
 
                 if (flankResult.Found)
                 {
                     // Flank position available - go for it
-                    Debug.Log($"[CombatState] {controller.name} deciding to flank");
                     var flankState = new FlankState(currentTarget);
                     stateMachine.ChangeState(flankState);
                     return;
                 }
             }
 
-            // Can't or shouldn't flank - overwatch
-            Debug.Log($"[CombatState] {controller.name} deciding to overwatch");
-            var overwatchState = new OverwatchState(currentTarget);
-            stateMachine.ChangeState(overwatchState);
+            // Can't flank - decide between suppress and overwatch
+            // Aggressive units prefer suppression, defensive prefer overwatch
+            bool shouldSuppress = ShouldSuppressInsteadOfOverwatch(bravery);
+
+            if (shouldSuppress && currentTarget != null)
+            {
+                var suppressState = new SuppressState(currentTarget);
+                stateMachine.ChangeState(suppressState);
+            }
+            else
+            {
+                var overwatchState = new OverwatchState(currentTarget);
+                stateMachine.ChangeState(overwatchState);
+            }
+        }
+
+        /// <summary>
+        /// Decide if we should suppress instead of overwatch.
+        /// Based on squad threat, aggression/bravery, and randomness.
+        /// </summary>
+        private bool ShouldSuppressInsteadOfOverwatch(int bravery)
+        {
+            // If squad is under heavy fire, always suppress to help teammates
+            if (controller.Squad != null && controller.Squad.IsUnderHeavyFire)
+            {
+                return true;
+            }
+
+            // More aggressive posture = more likely to suppress
+            float suppressChance = controller.Posture switch
+            {
+                Posture.Aggressive => 0.8f,
+                Posture.Neutral => 0.4f + (bravery / 40f), // 0.4 to 0.9 based on bravery
+                Posture.Defensive => 0.2f,
+                _ => 0.3f
+            };
+
+            return Random.value < suppressChance;
         }
 
         private void UpdateStanding()
@@ -261,8 +342,6 @@ namespace Starbelter.AI
         {
             if (phaseTimer <= 0)
             {
-                // Fire the shot
-                Debug.Log($"[CombatState] {controller.name} about to fire. Unit at {(Vector2)controller.transform.position}, fire pos at {(Vector2)controller.FirePosition}");
                 FireAtTarget();
                 StartPhase(CombatPhase.Ducking);
             }
@@ -352,24 +431,57 @@ namespace Starbelter.AI
 
         #region Actions
 
-        private void SeekCover()
+        /// <summary>
+        /// Attempt to move to cover. Returns true if movement started.
+        /// </summary>
+        private bool SeekCover()
         {
+            // Build tactical search parameters from posture
+            int bravery = controller.Character?.Bravery ?? 10;
+            var leaderPos = controller.GetLeaderPosition();
+            var searchParams = CoverSearchParams.FromPosture(controller.WeaponRange, controller.Posture, bravery, controller.Team, leaderPos);
+
+            // Limit cover search radius based on health
+            // Healthy units stay close and fight, hurt units can retreat further
+            float healthPercent = controller.Health != null ? controller.Health.HealthPercent : 1f;
+            float maxCoverDistance;
+
+            if (healthPercent > 0.7f)
+            {
+                // Healthy - only look for nearby cover (stay in the fight)
+                maxCoverDistance = 5f;
+            }
+            else if (healthPercent > 0.4f)
+            {
+                // Wounded - expand search a bit
+                maxCoverDistance = 8f;
+            }
+            else
+            {
+                // Critical - search far for safety
+                maxCoverDistance = -1f; // No limit
+            }
+
+            Vector3 threatPos;
+
             if (ThreatManager != null)
             {
                 var threatDir = ThreatManager.GetHighestThreatDirection();
                 if (threatDir.HasValue)
                 {
-                    Movement.MoveToCover(controller.transform.position +
-                        new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f);
-                    return;
+                    threatPos = controller.transform.position +
+                        new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+                    return Movement.MoveToCover(threatPos, searchParams, maxCoverDistance);
                 }
             }
 
             // No threat direction, use target position
             if (currentTarget != null)
             {
-                Movement.MoveToCover(currentTarget.transform.position);
+                return Movement.MoveToCover(currentTarget.transform.position, searchParams, maxCoverDistance);
             }
+
+            return false;
         }
 
         private void FindTarget()
@@ -395,6 +507,14 @@ namespace Starbelter.AI
                 // Skip dead targets
                 if (target.IsDead) continue;
 
+                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
+
+                // Register visible enemies within weapon range as threats
+                if (distance <= weaponRange && ThreatManager != null)
+                {
+                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
+
                 // Calculate priority based on distance and cover
                 float priority = CombatUtils.CalculateTargetPriority(
                     controller.transform.position,
@@ -413,14 +533,17 @@ namespace Starbelter.AI
             currentTargetPriority = bestPriority;
         }
 
+        private bool IsTargetDead()
+        {
+            if (currentTarget == null) return true;
+            var targetable = currentTarget.GetComponent<ITargetable>();
+            return targetable != null && targetable.IsDead;
+        }
+
         private void FireAtTarget()
         {
             if (currentTarget == null) return;
-            if (controller.ProjectilePrefab == null)
-            {
-                Debug.LogWarning($"[CombatState] {controller.name} has no projectile prefab!");
-                return;
-            }
+            if (controller.ProjectilePrefab == null) return;
 
             // Determine fire position
             Vector3 firePos = controller.FirePoint != null
@@ -444,11 +567,9 @@ namespace Starbelter.AI
             if (projectile != null)
             {
                 projectile.Fire(finalDirection, controller.Team);
-                Debug.Log($"[CombatState] {controller.name} fires at {currentTarget.name} from {firePos} toward {targetPos}, direction {finalDirection}");
             }
             else
             {
-                Debug.LogWarning($"[CombatState] Projectile prefab missing Projectile component!");
                 Object.Destroy(projectileObj);
             }
         }

@@ -1,6 +1,8 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
+using Starbelter.Core;
+using Starbelter.Combat;
 
 namespace Starbelter.Pathfinding
 {
@@ -52,21 +54,202 @@ namespace Starbelter.Pathfinding
         /// <returns>Best cover position, or null if none found</returns>
         public CoverResult? FindBestCover(Vector3 unitPosition, Vector3 threatPosition, float maxDistance = -1f)
         {
+            return FindBestCover(unitPosition, threatPosition, CoverSearchParams.Default, maxDistance);
+        }
+
+        /// <summary>
+        /// Finds the best cover position with tactical parameters (weapon range, aggression).
+        /// </summary>
+        public CoverResult? FindBestCover(Vector3 unitPosition, Vector3 threatPosition, CoverSearchParams searchParams, float maxDistance = -1f, GameObject excludeUnit = null)
+        {
             if (coverBaker == null) return null;
 
             if (maxDistance <= 0) maxDistance = maxSearchRadius;
 
-            var candidates = FindCoverCandidates(unitPosition, threatPosition, maxDistance);
+            var candidates = FindCoverCandidates(unitPosition, threatPosition, maxDistance, excludeUnit);
 
             if (candidates.Count == 0) return null;
 
-            // Combined score: prioritize nearby cover that still faces the threat
-            // Formula: score / (1 + distance * 0.2) - closer cover gets boosted
-            var best = candidates
-                .OrderByDescending(c => c.Score / (1f + c.DistanceFromUnit * 0.2f))
-                .First();
+            // Score each candidate with tactical considerations
+            float bestScore = float.MinValue;
+            CoverResult? best = null;
+
+            foreach (var candidate in candidates)
+            {
+                float score = ScoreCoverTactically(candidate, unitPosition, threatPosition, searchParams);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
 
             return best;
+        }
+
+        /// <summary>
+        /// Score a cover position based on tactical factors.
+        /// </summary>
+        private float ScoreCoverTactically(CoverResult cover, Vector3 unitPosition, Vector3 threatPosition, CoverSearchParams searchParams)
+        {
+            // === ALIGNMENT IS CRITICAL ===
+            // Base score is 0-1 alignment, but we need it to matter a LOT
+            // Cover that doesn't face the threat is nearly useless
+            float alignment = cover.Score; // 0-1, how well cover faces threat
+
+            // If alignment is poor (< 0.3), this cover is almost useless against this threat
+            if (alignment < 0.3f)
+            {
+                return -100f; // Reject poorly aligned cover
+            }
+
+            // Start with alignment as major factor (0-50 points)
+            float score = alignment * 50f;
+
+            // === COVER TYPE SCORING ===
+            // Determine best cover type at this position that faces the threat
+            CoverType bestCoverType = CoverType.None;
+            Vector2 directionToThreat = ((Vector2)(threatPosition - cover.WorldPosition)).normalized;
+
+            foreach (var source in cover.CoverSources)
+            {
+                // Only count cover that actually faces the threat
+                float sourceAlignment = Vector2.Dot(source.DirectionToCover, directionToThreat);
+                if (sourceAlignment > 0.3f)
+                {
+                    if (source.Type == CoverType.Full)
+                        bestCoverType = CoverType.Full;
+                    else if (source.Type == CoverType.Half && bestCoverType != CoverType.Full)
+                        bestCoverType = CoverType.Half;
+                }
+            }
+
+            // Cover type bonus - but not so large it overrides proximity
+            if (bestCoverType == CoverType.Full)
+            {
+                score += Mathf.Lerp(20f, 10f, searchParams.Aggression);
+            }
+            else if (bestCoverType == CoverType.Half)
+            {
+                score += Mathf.Lerp(10f, 20f, searchParams.Aggression);
+            }
+            else
+            {
+                // No aligned cover at this position
+                return -100f;
+            }
+
+            // === TRAVEL DISTANCE - VERY IMPORTANT ===
+            // Nearby cover is much better - don't run across the battlefield
+            // Each tile of travel is a significant penalty
+            score -= cover.DistanceFromUnit * 8f;
+
+            // === RANGE TO THREAT ===
+            float distToThreat = Vector3.Distance(cover.WorldPosition, threatPosition);
+
+            // Optimal range depends on aggression
+            float optimalRangeMin = Mathf.Lerp(searchParams.WeaponRange * 0.6f, searchParams.WeaponRange * 0.3f, searchParams.Aggression);
+            float optimalRangeMax = Mathf.Lerp(searchParams.WeaponRange * 0.9f, searchParams.WeaponRange * 0.6f, searchParams.Aggression);
+
+            if (distToThreat < searchParams.MinEngageRange)
+            {
+                // Too close - penalty
+                score -= (searchParams.MinEngageRange - distToThreat) * 15f;
+            }
+            else if (distToThreat > searchParams.WeaponRange)
+            {
+                // Out of range - heavy penalty
+                score -= (distToThreat - searchParams.WeaponRange) * 20f;
+            }
+            else if (distToThreat >= optimalRangeMin && distToThreat <= optimalRangeMax)
+            {
+                // In optimal range - small bonus
+                score += 10f;
+            }
+
+            // === ENEMY PROXIMITY PENALTY ===
+            // Check for nearby enemies - cover near multiple enemies is dangerous
+            float enemyProximityPenalty = CalculateEnemyProximityPenalty(cover.WorldPosition, searchParams);
+            score -= enemyProximityPenalty;
+
+            // === LEADER PROXIMITY BONUS ===
+            // Stay close to squad leader for cohesion
+            float leaderBonus = CalculateLeaderProximityBonus(cover.WorldPosition, searchParams);
+            score += leaderBonus;
+
+            return score;
+        }
+
+        /// <summary>
+        /// Calculate bonus for staying close to the squad leader.
+        /// Cover near the leader is preferred for squad cohesion.
+        /// </summary>
+        private float CalculateLeaderProximityBonus(Vector3 coverPosition, CoverSearchParams searchParams)
+        {
+            if (!searchParams.LeaderPosition.HasValue) return 0f;
+
+            Vector3 leaderPos = searchParams.LeaderPosition.Value;
+            float distToLeader = Vector3.Distance(coverPosition, leaderPos);
+
+            const float idealRange = 4f;   // Ideal distance from leader
+            const float maxRange = 10f;    // Beyond this, no bonus
+
+            if (distToLeader <= idealRange)
+            {
+                // Very close to leader - big bonus
+                return 30f;
+            }
+            else if (distToLeader <= maxRange)
+            {
+                // Nearby leader - scaled bonus
+                float factor = 1f - ((distToLeader - idealRange) / (maxRange - idealRange));
+                return 30f * factor;
+            }
+
+            // Too far from leader - no bonus (but no penalty either, they might need to flank)
+            return 0f;
+        }
+
+        /// <summary>
+        /// Calculate penalty based on how many enemies are near the cover position.
+        /// Being close to multiple enemies is very dangerous even with cover.
+        /// </summary>
+        private float CalculateEnemyProximityPenalty(Vector3 coverPosition, CoverSearchParams searchParams)
+        {
+            // Skip if no team specified
+            if (searchParams.UnitTeam == Team.Neutral) return 0f;
+
+            float totalPenalty = 0f;
+            const float dangerRadius = 8f; // Enemies within this range are dangerous
+            const float extremeDangerRadius = 4f; // Enemies this close are extremely dangerous
+
+            var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+
+            foreach (var mb in allTargets)
+            {
+                var targetable = mb as ITargetable;
+                if (targetable == null) continue;
+                if (targetable.Team == searchParams.UnitTeam) continue; // Skip allies
+                if (targetable.Team == Team.Neutral) continue; // Skip neutrals
+                if (targetable.IsDead) continue;
+
+                float dist = Vector3.Distance(coverPosition, targetable.Transform.position);
+
+                if (dist < extremeDangerRadius)
+                {
+                    // Extremely close enemy - massive penalty, almost never go here
+                    totalPenalty += 100f;
+                }
+                else if (dist < dangerRadius)
+                {
+                    // Nearby enemy - significant penalty that scales with proximity
+                    // At 4 units: 40 penalty, at 8 units: 0 penalty
+                    float proximityFactor = 1f - ((dist - extremeDangerRadius) / (dangerRadius - extremeDangerRadius));
+                    totalPenalty += 40f * proximityFactor;
+                }
+            }
+
+            return totalPenalty;
         }
 
         /// <summary>
@@ -176,15 +359,107 @@ namespace Starbelter.Pathfinding
         }
 
         /// <summary>
+        /// Finds a position from which the unit can suppress a target.
+        /// The position must have cover from the target AND clear line of fire to the target's cover.
+        /// </summary>
+        public Vector3Int? FindSuppressPosition(Vector3 unitPosition, Vector3 targetPosition, float weaponRange, GameObject excludeUnit = null)
+        {
+            if (coverBaker == null) return null;
+
+            var candidates = GetAllCoverPositions(unitPosition, maxSearchRadius, excludeUnit);
+
+            float bestScore = float.MinValue;
+            Vector3Int? bestPosition = null;
+
+            foreach (var candidate in candidates)
+            {
+                float distToTarget = Vector3.Distance(candidate.WorldPosition, targetPosition);
+
+                // Must be in weapon range
+                if (distToTarget > weaponRange) continue;
+
+                // Must have cover facing the target
+                Vector2 dirToTarget = ((Vector2)(targetPosition - candidate.WorldPosition)).normalized;
+                bool hasCoverFromTarget = false;
+
+                foreach (var source in candidate.CoverSources)
+                {
+                    float alignment = Vector2.Dot(source.DirectionToCover, dirToTarget);
+                    if (alignment > 0.3f)
+                    {
+                        hasCoverFromTarget = true;
+                        break;
+                    }
+                }
+
+                if (!hasCoverFromTarget) continue;
+
+                // Must have clear LOS to suppress (not blocked by cover near this position)
+                if (!CanSuppressFrom(candidate.WorldPosition, targetPosition)) continue;
+
+                // Score: prefer closer to current position, reasonable range to target
+                float score = 0f;
+                score -= candidate.DistanceFromUnit * 5f; // Prefer nearby positions
+
+                // Prefer mid-range over very close or very far
+                float optimalDist = weaponRange * 0.6f;
+                float rangeDelta = Mathf.Abs(distToTarget - optimalDist);
+                score -= rangeDelta * 2f;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestPosition = candidate.TilePosition;
+                }
+            }
+
+            return bestPosition;
+        }
+
+        /// <summary>
+        /// Checks if suppressive fire is possible from a position to a target.
+        /// Returns true if the path isn't blocked by cover near the firing position.
+        /// </summary>
+        private bool CanSuppressFrom(Vector3 firePosition, Vector3 targetPosition)
+        {
+            Vector2 direction = ((Vector2)(targetPosition - firePosition)).normalized;
+            float distance = Vector2.Distance(firePosition, targetPosition);
+
+            RaycastHit2D[] hits = Physics2D.RaycastAll(firePosition, direction, distance);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            foreach (var hit in hits)
+            {
+                if (hit.distance < 0.1f) continue;
+
+                var structure = hit.collider.GetComponent<Structure>();
+                if (structure != null && structure.CoverType == CoverType.Full)
+                {
+                    // If full cover is in first 30% of distance, we're blocked
+                    if (hit.distance < distance * 0.3f)
+                    {
+                        return false;
+                    }
+                    // Cover beyond 30% is target's cover - we can suppress it
+                    return true;
+                }
+            }
+
+            // No full cover blocking - can suppress
+            return true;
+        }
+
+        /// <summary>
         /// Gets all cover positions within a radius, regardless of threat direction.
         /// Used for flank position searching.
         /// </summary>
-        public List<CoverResult> GetAllCoverPositions(Vector2 centerPosition, float maxDistance)
+        public List<CoverResult> GetAllCoverPositions(Vector2 centerPosition, float maxDistance, GameObject excludeUnit = null)
         {
             if (coverBaker == null) return new List<CoverResult>();
 
             var results = new List<CoverResult>();
             var allCover = coverBaker.GetAllCoverData();
+            var tileOccupancy = TileOccupancy.Instance;
 
             foreach (var kvp in allCover)
             {
@@ -194,6 +469,12 @@ namespace Starbelter.Pathfinding
                 float distance = Vector2.Distance(centerPosition, (Vector2)worldPos);
                 if (distance > maxDistance) continue;
                 if (distance < 0.5f) continue; // Skip positions too close
+
+                // Skip occupied or reserved tiles
+                if (tileOccupancy != null && !tileOccupancy.IsTileAvailable(tilePos, excludeUnit))
+                {
+                    continue;
+                }
 
                 results.Add(new CoverResult
                 {
@@ -208,10 +489,11 @@ namespace Starbelter.Pathfinding
             return results;
         }
 
-        private List<CoverResult> FindCoverCandidates(Vector3 unitPosition, Vector3 threatPosition, float maxDistance)
+        private List<CoverResult> FindCoverCandidates(Vector3 unitPosition, Vector3 threatPosition, float maxDistance, GameObject excludeUnit = null)
         {
             var results = new List<CoverResult>();
             var allCover = coverBaker.GetAllCoverData();
+            var tileOccupancy = TileOccupancy.Instance;
 
             Vector2 directionToThreat = ((Vector2)(threatPosition - unitPosition)).normalized;
 
@@ -223,9 +505,14 @@ namespace Starbelter.Pathfinding
                 float distanceFromUnit = Vector3.Distance(unitPosition, worldPos);
                 if (distanceFromUnit > maxDistance) continue;
 
-                // Check if this position is occupied (will integrate with TileOccupancy later)
-                // For now, skip positions too close to the unit's current position
+                // Skip positions too close to the unit's current position
                 if (distanceFromUnit < 0.5f) continue;
+
+                // Skip occupied or reserved tiles
+                if (tileOccupancy != null && !tileOccupancy.IsTileAvailable(tilePos, excludeUnit))
+                {
+                    continue;
+                }
 
                 // Evaluate cover quality against threat
                 float score = EvaluateCoverPosition(worldPos, threatPosition, kvp.Value);
@@ -320,5 +607,52 @@ namespace Starbelter.Pathfinding
         public bool HasCover;
         public CoverType Type;
         public GameObject CoverObject;
+    }
+
+    /// <summary>
+    /// Parameters for tactical cover searching that considers combat engagement.
+    /// </summary>
+    public struct CoverSearchParams
+    {
+        public float WeaponRange;      // Max engagement range
+        public float MinEngageRange;   // Minimum comfortable range (don't get too close)
+        public float Aggression;       // 0-1, affects preferred distance and cover type
+        public Team UnitTeam;          // Team of the unit seeking cover
+        public Vector3? LeaderPosition; // Position of squad leader (null if no leader or is leader)
+
+        /// <summary>
+        /// Create default parameters (neutral).
+        /// </summary>
+        public static CoverSearchParams Default => new CoverSearchParams
+        {
+            WeaponRange = 15f,
+            MinEngageRange = 4f,
+            Aggression = 0.5f,
+            UnitTeam = Team.Neutral,
+            LeaderPosition = null
+        };
+
+        /// <summary>
+        /// Create from posture and optional bravery (for Neutral posture).
+        /// </summary>
+        public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, Team team = Team.Neutral, Vector3? leaderPos = null)
+        {
+            float aggression = posture switch
+            {
+                Posture.Defensive => 0f,
+                Posture.Aggressive => 1f,
+                Posture.Neutral => bravery / 20f, // Let bravery decide
+                _ => 0f
+            };
+
+            return new CoverSearchParams
+            {
+                WeaponRange = weaponRange,
+                MinEngageRange = 4f,
+                Aggression = aggression,
+                UnitTeam = team,
+                LeaderPosition = leaderPos
+            };
+        }
     }
 }

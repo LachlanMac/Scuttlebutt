@@ -12,7 +12,6 @@ GameObject:
   - component: {fileID: 1796098332888785612}
   - component: {fileID: 4107486173833943135}
   - component: {fileID: 6305561772949558456}
-  - component: {fileID: 976126218275890641}
   - component: {fileID: 7622062220924767648}
   - component: {fileID: 887469601354721680}
   - component: {fileID: 5776946462178396635}
@@ -114,6 +113,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Starbelter.AI.UnitMovement
   moveSpeed: 5
+  useRVO: 1
 --- !u!50 &6305561772949558456
 Rigidbody2D:
   serializedVersion: 5
@@ -141,33 +141,6 @@ Rigidbody2D:
   m_SleepingMode: 1
   m_CollisionDetection: 0
   m_Constraints: 0
---- !u!114 &976126218275890641
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1548625376942975298}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 560112f876f5746c780eca0d404e7139, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: AstarPathfindingProject::Pathfinding.RVO.RVOController
-  version: 1073741824
-  radiusBackingField: 0.5
-  heightBackingField: 2
-  centerBackingField: 1
-  locked: 0
-  lockWhenNotMoving: 0
-  agentTimeHorizon: 2
-  obstacleTimeHorizon: 0.5
-  maxNeighbours: 10
-  layer: 1
-  collidesWith: -1
-  wallAvoidForce: 1
-  wallAvoidFalloff: 1
-  priority: 0.5
-  debug: 0
 --- !u!212 &7622062220924767648
 SpriteRenderer:
   m_ObjectHideFlags: 0
@@ -245,6 +218,7 @@ MonoBehaviour:
     Accuracy: 10
     Reflex: 10
     Bravery: 10
+    Agility: 10
     PhysicalMitigation: 0
     HeatMitigation: 0
     EnergyMitigation: 0
@@ -253,6 +227,8 @@ MonoBehaviour:
   projectilePrefab: {fileID: 112090731843474039, guid: 5183cc8f3a64e6b458b0d415d12417be, type: 3}
   firePoint: {fileID: 0}
   weaponRange: 15
+  posture: 1
+  defensiveThreshold: 5
 --- !u!61 &5776946462178396635
 BoxCollider2D:
   m_ObjectHideFlags: 0

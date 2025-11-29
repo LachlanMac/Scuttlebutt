@@ -1,6 +1,5 @@
 using UnityEngine;
 using Pathfinding;
-using Pathfinding.RVO;
 using Starbelter.Pathfinding;
 
 namespace Starbelter.AI
@@ -13,7 +12,7 @@ namespace Starbelter.AI
     [RequireComponent(typeof(Seeker))]
     public class UnitMovement : MonoBehaviour
     {
-        private const float ARRIVAL_THRESHOLD = 0.001f;
+        private const float ARRIVAL_THRESHOLD = 0.05f; // 5cm threshold to avoid floating point jitter
 
         [Header("Movement Settings")]
         [SerializeField] private float moveSpeed = 5f;
@@ -21,7 +20,6 @@ namespace Starbelter.AI
         // Components
         private Seeker seeker;
         private Rigidbody2D rb;
-        private RVOController rvoController;
 
         // Pathfinding state
         private Path currentPath;
@@ -30,8 +28,17 @@ namespace Starbelter.AI
         private Vector3 targetPosition;
         private Vector3Int targetTile;
 
+        // Path request throttling
+        private float lastPathRequestTime;
+        private const float PATH_REQUEST_COOLDOWN = 1f;
+
+        // Acceleration
+        private float currentSpeed;
+        private const float BASE_ACCELERATION_TIME = 1f; // Time to reach full speed at average agility
+
         // References
         private TileOccupancy tileOccupancy;
+        private UnitController unitController;
 
         public bool IsMoving => isMoving;
         public Vector3 TargetPosition => targetPosition;
@@ -46,7 +53,7 @@ namespace Starbelter.AI
         {
             seeker = GetComponent<Seeker>();
             rb = GetComponent<Rigidbody2D>();
-            rvoController = GetComponent<RVOController>();
+            unitController = GetComponent<UnitController>();
         }
 
         private void Start()
@@ -70,10 +77,19 @@ namespace Starbelter.AI
         /// <summary>
         /// Moves to a specific tile position.
         /// </summary>
-        public void MoveToTile(Vector3Int tilePosition)
+        /// <returns>True if movement was started, false if blocked or throttled</returns>
+        public bool MoveToTile(Vector3Int tilePosition)
         {
             // Convert tile to world position for A* checks
             Vector3 worldPos = TileToWorld(tilePosition);
+
+            // Check if we're already at this tile (avoid unnecessary path request)
+            float distanceToTarget = Vector3.Distance(transform.position, worldPos);
+            if (distanceToTarget <= ARRIVAL_THRESHOLD)
+            {
+                // Already here, no movement needed
+                return false;
+            }
 
             // Check if tile is walkable on A* graph
             GraphNode node = null;
@@ -83,27 +99,34 @@ namespace Starbelter.AI
             }
             if (node == null || !node.Walkable)
             {
-                Debug.LogWarning($"[UnitMovement] Tile {tilePosition} is not walkable");
-                return;
+                Debug.LogWarning($"[UnitMovement] {gameObject.name} tile {tilePosition} is not walkable");
+                return false;
             }
 
             // Check if tile is occupied by another unit
             if (tileOccupancy != null && !tileOccupancy.IsTileAvailable(tilePosition, gameObject))
             {
-                Debug.LogWarning($"[UnitMovement] Tile {tilePosition} is occupied");
-                return;
-            }
-
-            // Reserve the target tile
-            if (tileOccupancy != null)
-            {
-                tileOccupancy.ReserveTile(gameObject, tilePosition);
+                Debug.LogWarning($"[UnitMovement] {gameObject.name} tile {tilePosition} is occupied");
+                return false;
             }
 
             targetTile = tilePosition;
             targetPosition = worldPos;
 
-            RequestPath(targetPosition);
+            // Request path - only reserve tile if request was accepted
+            if (RequestPath(targetPosition))
+            {
+                if (tileOccupancy != null)
+                {
+                    tileOccupancy.ReserveTile(gameObject, tilePosition);
+                }
+                return true;
+            }
+            else
+            {
+                // Path request throttled - don't spam logs
+                return false;
+            }
         }
 
         private Vector3 TileToWorld(Vector3Int tilePosition)
@@ -119,17 +142,18 @@ namespace Starbelter.AI
         /// <summary>
         /// Moves to a world position. Converts to tile position.
         /// </summary>
-        public void MoveTo(Vector3 worldPosition)
+        /// <returns>True if movement was started, false if blocked or throttled</returns>
+        public bool MoveTo(Vector3 worldPosition)
         {
             if (tileOccupancy != null)
             {
                 var tilePos = tileOccupancy.WorldToTile(worldPosition);
-                MoveToTile(tilePos);
+                return MoveToTile(tilePos);
             }
             else
             {
                 targetPosition = worldPosition;
-                RequestPath(worldPosition);
+                return RequestPath(worldPosition);
             }
         }
 
@@ -138,6 +162,14 @@ namespace Starbelter.AI
         /// </summary>
         public bool MoveToCover(Vector3 threatPosition)
         {
+            return MoveToCover(threatPosition, CoverSearchParams.Default, -1f);
+        }
+
+        /// <summary>
+        /// Moves to cover position with tactical parameters.
+        /// </summary>
+        public bool MoveToCover(Vector3 threatPosition, CoverSearchParams searchParams, float maxDistance = -1f)
+        {
             var coverQuery = CoverQuery.Instance;
             if (coverQuery == null)
             {
@@ -145,7 +177,8 @@ namespace Starbelter.AI
                 return false;
             }
 
-            var coverResult = coverQuery.FindBestCover(transform.position, threatPosition);
+            // Pass this unit's gameObject to exclude from occupancy check
+            var coverResult = coverQuery.FindBestCover(transform.position, threatPosition, searchParams, maxDistance, gameObject);
 
             if (coverResult.HasValue)
             {
@@ -163,15 +196,11 @@ namespace Starbelter.AI
         {
             isMoving = false;
             currentPath = null;
+            currentSpeed = 0f;
 
             if (rb != null)
             {
                 rb.linearVelocity = Vector2.zero;
-            }
-
-            if (rvoController != null)
-            {
-                rvoController.Move(Vector3.zero);
             }
 
             // Clear reservation and occupy current tile
@@ -182,9 +211,38 @@ namespace Starbelter.AI
             }
         }
 
-        private void RequestPath(Vector3 destination)
+        /// <summary>
+        /// Updates current speed with acceleration based on Agility stat.
+        /// Higher agility = faster acceleration.
+        /// </summary>
+        private void UpdateSpeed()
         {
+            // Get agility stat (default to 10 if no character)
+            int agility = unitController?.Character?.Agility ?? 10;
+
+            // Calculate acceleration rate based on agility
+            // Agility 1 = 0.5x acceleration (2 seconds to full speed)
+            // Agility 10 = 1x acceleration (1 second to full speed)
+            // Agility 20 = 2x acceleration (0.5 seconds to full speed)
+            float agilityMultiplier = 0.5f + (agility / 20f) * 1.5f;
+            float acceleration = (moveSpeed / BASE_ACCELERATION_TIME) * agilityMultiplier;
+
+            // Smoothly accelerate toward max speed
+            currentSpeed = Mathf.MoveTowards(currentSpeed, moveSpeed, acceleration * Time.deltaTime);
+        }
+
+        private bool RequestPath(Vector3 destination)
+        {
+            // Throttle path requests to avoid spamming the pathfinder
+            if (Time.time - lastPathRequestTime < PATH_REQUEST_COOLDOWN)
+            {
+                return false;
+            }
+
+            lastPathRequestTime = Time.time;
+            isMoving = true; // Set immediately so states know we're about to move
             seeker.StartPath(transform.position, destination, OnPathComplete);
+            return true;
         }
 
         private void OnPathComplete(Path p)
@@ -192,6 +250,14 @@ namespace Starbelter.AI
             if (p.error)
             {
                 Debug.LogWarning($"[UnitMovement] Path error: {p.errorLog}");
+                // Clear movement state on path failure
+                isMoving = false;
+                currentPath = null;
+                // Clear reservation since we can't reach the target
+                if (tileOccupancy != null)
+                {
+                    tileOccupancy.ClearReservation(gameObject);
+                }
                 return;
             }
 
@@ -218,28 +284,26 @@ namespace Starbelter.AI
             Vector3 direction = (currentTarget - transform.position).normalized;
             float distanceToWaypoint = Vector3.Distance(transform.position, currentTarget);
 
-            // Calculate movement this frame
-            float moveDistance = moveSpeed * Time.deltaTime;
+            // Apply acceleration based on Agility stat
+            UpdateSpeed();
+            float moveDistance = currentSpeed * Time.deltaTime;
 
-            // Move using RVO if available, otherwise direct movement
-            if (rvoController != null)
+            // Move using Rigidbody2D or direct transform
+            if (rb != null && rb.bodyType == RigidbodyType2D.Dynamic)
             {
-                rvoController.SetTarget(currentTarget, moveSpeed, moveSpeed * 1.2f, targetPosition);
-                Vector3 rvoVelocity = rvoController.velocity;
-                transform.position += rvoVelocity * Time.deltaTime;
-
-                if (rvoVelocity.sqrMagnitude > 0.01f)
-                {
-                    direction = rvoVelocity.normalized;
-                }
-            }
-            else if (rb != null && rb.bodyType == RigidbodyType2D.Dynamic)
-            {
-                rb.linearVelocity = direction * moveSpeed;
+                rb.linearVelocity = direction * currentSpeed;
             }
             else if (rb != null && rb.bodyType == RigidbodyType2D.Kinematic)
             {
-                rb.MovePosition(transform.position + direction * moveDistance);
+                // Clamp to not overshoot target
+                if (moveDistance >= distanceToTarget)
+                {
+                    rb.MovePosition(targetPosition);
+                }
+                else
+                {
+                    rb.MovePosition(transform.position + direction * moveDistance);
+                }
             }
             else
             {

@@ -31,13 +31,24 @@ namespace Starbelter.AI
         [SerializeField] private Transform firePoint;
         [SerializeField] private float weaponRange = 15f;
 
+        [Header("Tactics")]
+        [SerializeField] private Posture posture = Posture.Neutral;
+        [Tooltip("Threat level above which unit becomes defensive")]
+        [SerializeField] private float defensiveThreshold = 5f;
+
         // Components
         private UnitMovement movement;
         private UnitHealth unitHealth;
         private UnitStateMachine stateMachine;
 
+        // Squad
+        private SquadController squad;
+        private bool isSquadLeader;
+
         // Public accessors for states
         public Team Team => team;
+        public SquadController Squad => squad;
+        public bool IsSquadLeader => isSquadLeader;
         public Character Character => character;
         public UnitMovement Movement => movement;
         public UnitHealth Health => unitHealth;
@@ -45,6 +56,76 @@ namespace Starbelter.AI
         public GameObject ProjectilePrefab => projectilePrefab;
         public Transform FirePoint => firePoint;
         public float WeaponRange => weaponRange;
+
+        /// <summary>
+        /// Get effective posture, factoring in threat level, health, and leader status.
+        /// Leaders play more defensively. High threat + low health = forced defensive.
+        /// </summary>
+        public Posture Posture
+        {
+            get
+            {
+                // If already set to defensive, stay defensive
+                if (posture == Posture.Defensive) return Posture.Defensive;
+
+                // Squad leaders are always at least neutral (never aggressive)
+                if (isSquadLeader && posture == Posture.Aggressive)
+                {
+                    return Posture.Neutral;
+                }
+
+                // Calculate effective threat: threat * (1 + (1 - healthPercent))
+                // At full health: threat * 1.0
+                // At half health: threat * 1.5
+                // At 10% health: threat * 1.9
+                float effectiveThreat = GetEffectiveThreat();
+
+                // Leaders become defensive at lower threat thresholds
+                float threshold = isSquadLeader ? defensiveThreshold * 0.7f : defensiveThreshold;
+
+                if (effectiveThreat > threshold)
+                {
+                    return Posture.Defensive;
+                }
+
+                return posture;
+            }
+        }
+
+        /// <summary>
+        /// Get threat level multiplied by health vulnerability.
+        /// </summary>
+        public float GetEffectiveThreat()
+        {
+            if (threatManager == null) return 0f;
+
+            float baseThreat = threatManager.GetTotalThreat();
+            float healthPercent = unitHealth != null ? unitHealth.HealthPercent : 1f;
+            float healthMultiplier = 1f + (1f - healthPercent);
+
+            return baseThreat * healthMultiplier;
+        }
+
+        // Suppression tracking
+        private float suppressedUntil;
+        private const float SUPPRESSION_DURATION = 1.5f;
+
+        // Flank response tracking - prevent repeated reactions to flanking
+        private float lastFlankResponseTime;
+        private const float FLANK_RESPONSE_COOLDOWN = 3f;
+
+        /// <summary>
+        /// Is this unit currently being suppressed (projectiles hitting nearby cover)?
+        /// </summary>
+        public bool IsSuppressed => Time.time < suppressedUntil;
+
+        /// <summary>
+        /// Called when a projectile hits cover near this unit.
+        /// </summary>
+        public void ApplySuppression()
+        {
+            suppressedUntil = Time.time + SUPPRESSION_DURATION;
+        }
 
         /// <summary>
         /// The actual position projectiles will fire from.
@@ -60,14 +141,22 @@ namespace Starbelter.AI
             get
             {
                 var coverQuery = CoverQuery.Instance;
-                if (coverQuery == null || threatManager == null) return false;
+                if (coverQuery == null) return false;
 
-                var threatDir = threatManager.GetHighestThreatDirection();
-                if (!threatDir.HasValue) return false;
+                // Try threat direction first
+                if (threatManager != null)
+                {
+                    var threatDir = threatManager.GetHighestThreatDirection();
+                    if (threatDir.HasValue)
+                    {
+                        Vector3 threatWorldPos = transform.position + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+                        var coverCheck = coverQuery.CheckCoverAt(transform.position, threatWorldPos);
+                        return coverCheck.HasCover;
+                    }
+                }
 
-                Vector3 threatWorldPos = transform.position + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
-                var coverCheck = coverQuery.CheckCoverAt(transform.position, threatWorldPos);
-                return coverCheck.HasCover;
+                // No active threat direction - not in cover (need to find cover based on enemies)
+                return false;
             }
         }
 
@@ -123,7 +212,11 @@ namespace Starbelter.AI
             {
                 unitHealth.OnDamageTaken += OnDamageTaken;
                 unitHealth.OnFlanked += OnFlanked;
+                unitHealth.OnDeath += OnDeath;
             }
+
+            // Apply team color on start (for units placed in scene)
+            UpdateTeamColor();
         }
 
         private void OnDestroy()
@@ -132,6 +225,16 @@ namespace Starbelter.AI
             {
                 unitHealth.OnDamageTaken -= OnDamageTaken;
                 unitHealth.OnFlanked -= OnFlanked;
+                unitHealth.OnDeath -= OnDeath;
+            }
+        }
+
+        private void OnDeath()
+        {
+            // Notify squad if this was the leader
+            if (isSquadLeader && squad != null)
+            {
+                squad.OnLeaderDied();
             }
         }
 
@@ -149,10 +252,20 @@ namespace Starbelter.AI
 
         private void OnFlanked(Vector2 flankDirection)
         {
-            Debug.Log($"[UnitController] {name} flanked from {flankDirection}! Seeking new cover.");
+            // Don't interrupt if already seeking cover
+            if (stateMachine.CurrentState is SeekCoverState)
+            {
+                return;
+            }
+
+            // Don't react to flanking too frequently - prevents jittering
+            if (Time.time - lastFlankResponseTime < FLANK_RESPONSE_COOLDOWN)
+            {
+                return;
+            }
+            lastFlankResponseTime = Time.time;
 
             // Force seek new cover that protects from the flanking direction
-            // Pass the flank direction so SeekCoverState can find appropriate cover
             var seekCoverState = new SeekCoverState(flankDirection);
             stateMachine.ChangeState(seekCoverState);
         }
@@ -167,6 +280,43 @@ namespace Starbelter.AI
             {
                 threatManager.MyTeam = newTeam;
             }
+            UpdateTeamColor();
+        }
+
+        /// <summary>
+        /// Assign this unit to a squad and optionally make it the leader.
+        /// </summary>
+        public void SetSquad(SquadController newSquad, bool isLeader = false)
+        {
+            squad = newSquad;
+            isSquadLeader = isLeader;
+        }
+
+        /// <summary>
+        /// Get the squad leader's position, or null if no squad/leader.
+        /// </summary>
+        public Vector3? GetLeaderPosition()
+        {
+            if (squad == null) return null;
+            if (isSquadLeader) return null; // Leader doesn't follow itself
+            return squad.GetLeaderPosition();
+        }
+
+        /// <summary>
+        /// Updates the sprite color based on team.
+        /// </summary>
+        private void UpdateTeamColor()
+        {
+            var spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+            if (spriteRenderer == null) return;
+
+            spriteRenderer.color = team switch
+            {
+                Team.Ally => new Color(0.5f, 0.7f, 1f),    // Light blue
+                Team.Enemy => new Color(1f, 0.5f, 0.5f),  // Light red
+                Team.Neutral => Color.white,
+                _ => Color.white
+            };
         }
 
         /// <summary>

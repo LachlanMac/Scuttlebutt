@@ -31,32 +31,37 @@ namespace Starbelter.AI
 
             if (flankTarget == null)
             {
-                Debug.LogWarning($"[FlankState] {controller.name} has no flank target!");
-                ChangeState<IdleState>();
+                // Target gone, find new enemies
+                ChangeState<CombatState>();
                 return;
             }
 
-            // Find a flank position
+            // Find a flank position (exclude self from occupancy check)
             var flankResult = CombatUtils.FindFlankPosition(
                 controller.transform.position,
                 flankTarget.transform.position,
                 controller.WeaponRange,
-                CoverQuery.Instance
+                CoverQuery.Instance,
+                controller.gameObject,
+                controller.Team
             );
 
             if (flankResult.Found)
             {
                 flankPosition = flankResult.Position;
-                hasFlankPosition = true;
+                // Only set hasFlankPosition if movement actually started
+                hasFlankPosition = Movement.MoveTo(flankPosition);
 
-                // Move to flank position
-                Movement.MoveTo(flankPosition);
-                Debug.Log($"[FlankState] {controller.name} flanking to {flankPosition}");
+                if (!hasFlankPosition)
+                {
+                    // Movement throttled, fall back to overwatch
+                    var overwatchState = new OverwatchState(flankTarget);
+                    stateMachine.ChangeState(overwatchState);
+                }
             }
             else
             {
                 // No flank position found - fall back to overwatch
-                Debug.Log($"[FlankState] {controller.name} couldn't find flank position, going to overwatch");
                 var overwatchState = new OverwatchState(flankTarget);
                 stateMachine.ChangeState(overwatchState);
             }
@@ -67,9 +72,10 @@ namespace Starbelter.AI
             if (!hasFlankPosition) return;
 
             // Check if target is still valid
-            if (flankTarget == null || !flankTarget.activeInHierarchy)
+            if (flankTarget == null || !flankTarget.activeInHierarchy || IsFlankTargetDead())
             {
-                ChangeState<IdleState>();
+                // Target gone or dead, find new enemies
+                ChangeState<CombatState>();
                 return;
             }
 
@@ -81,7 +87,6 @@ namespace Starbelter.AI
 
                 if (!ShouldContinueFlanking())
                 {
-                    Debug.Log($"[FlankState] {controller.name} aborting flank - threat too high");
                     ChangeState<SeekCoverState>();
                     return;
                 }
@@ -91,30 +96,30 @@ namespace Starbelter.AI
             if (!Movement.IsMoving)
             {
                 // Verify we actually have LOS from the FIRE POSITION (not unit center)
-                // This must match where CombatState.FireAtTarget() spawns projectiles
                 Vector2 firePos = controller.FirePosition;
                 Vector2 targetPos = flankTarget.transform.position;
 
                 var los = CombatUtils.CheckLineOfSight(firePos, targetPos);
 
-                Debug.Log($"[FlankState] {controller.name} arrived. Unit at {(Vector2)controller.transform.position}, fire pos at {firePos}, target at {targetPos}");
-                Debug.Log($"[FlankState] LOS check: blocked={los.IsBlocked}, blocker={los.BlockingCover?.name}, distance={los.Distance:F1}");
-
                 if (los.IsBlocked)
                 {
-                    // Flank failed - still no LOS, try again or give up
-                    Debug.Log($"[FlankState] {controller.name} arrived but still no LOS (blocked by {los.BlockingCover?.name}), going to overwatch");
+                    // Flank failed - still no LOS, fall back to overwatch
                     var overwatchState = new OverwatchState(flankTarget);
                     stateMachine.ChangeState(overwatchState);
                     return;
                 }
 
                 // Arrived with valid LOS - engage target from THIS position
-                // Pass the target so CombatState skips seeking cover and shoots immediately
-                Debug.Log($"[FlankState] {controller.name} arrived at flank position with LOS, engaging");
                 var combatState = new CombatState(flankTarget);
                 stateMachine.ChangeState(combatState);
             }
+        }
+
+        private bool IsFlankTargetDead()
+        {
+            if (flankTarget == null) return true;
+            var targetable = flankTarget.GetComponent<ITargetable>();
+            return targetable != null && targetable.IsDead;
         }
 
         private bool ShouldContinueFlanking()

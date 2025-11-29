@@ -1,0 +1,1 @@
+- echo "" > /mnt/c/Users/lachl/AppData/Local/Unity/Editor/Editor.log clears the log when we want to read from that for debugging.

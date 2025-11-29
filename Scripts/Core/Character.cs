@@ -17,6 +17,7 @@ namespace Starbelter.Core
         [Range(1, 20)] public int Accuracy = 10;
         [Range(1, 20)] public int Reflex = 10;
         [Range(1, 20)] public int Bravery = 10;
+        [Range(1, 20)] public int Agility = 10;
 
         [Header("Damage Mitigation (0-100%, from armor/gear)")]
         [Range(0f, 100f)] public float PhysicalMitigation = 0f;
@@ -34,18 +35,20 @@ namespace Starbelter.Core
             Accuracy = 10;
             Reflex = 10;
             Bravery = 10;
+            Agility = 10;
         }
 
         /// <summary>
         /// Create a character with custom stats.
         /// </summary>
-        public Character(string name, int health, int accuracy, int reflex, int bravery)
+        public Character(string name, int health, int accuracy, int reflex, int bravery, int agility = 10)
         {
             Name = name;
             Health = Mathf.Clamp(health, 1, 20);
             Accuracy = Mathf.Clamp(accuracy, 1, 20);
             Reflex = Mathf.Clamp(reflex, 1, 20);
             Bravery = Mathf.Clamp(bravery, 1, 20);
+            Agility = Mathf.Clamp(agility, 1, 20);
         }
 
         /// <summary>

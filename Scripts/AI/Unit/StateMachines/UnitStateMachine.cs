@@ -44,8 +44,6 @@ namespace Starbelter.AI
             currentState = new T();
             currentState.Initialize(controller, this);
             currentState.Enter();
-
-            Debug.Log($"[UnitStateMachine] {controller.name} → {CurrentStateName}");
         }
 
         /// <summary>
@@ -63,8 +61,6 @@ namespace Starbelter.AI
             currentState = newState;
             currentState.Initialize(controller, this);
             currentState.Enter();
-
-            Debug.Log($"[UnitStateMachine] {controller.name} → {CurrentStateName}");
         }
     }
 }

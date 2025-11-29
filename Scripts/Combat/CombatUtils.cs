@@ -1,4 +1,5 @@
 using UnityEngine;
+using Starbelter.Core;
 using Starbelter.Pathfinding;
 
 namespace Starbelter.Combat
@@ -23,12 +24,14 @@ namespace Starbelter.Combat
 
         /// <summary>
         /// Check line of sight from attacker to target, detecting cover in between.
+        /// Half cover only counts if someone is using it (near attacker or near target).
+        /// Half cover in the middle of nowhere is ignored.
         /// </summary>
         /// <param name="attackerPos">Position of the attacker</param>
         /// <param name="targetPos">Position of the target</param>
-        /// <param name="ignoreRadius">Ignore structures within this radius of attacker (own cover)</param>
+        /// <param name="coverProximityRadius">Half cover must be within this distance of attacker or target to count</param>
         /// <returns>LineOfSightResult with cover information</returns>
-        public static LineOfSightResult CheckLineOfSight(Vector2 attackerPos, Vector2 targetPos, float ignoreHalfCoverRadius = 1.5f)
+        public static LineOfSightResult CheckLineOfSight(Vector2 attackerPos, Vector2 targetPos, float coverProximityRadius = 1.5f)
         {
             var result = new LineOfSightResult
             {
@@ -44,7 +47,6 @@ namespace Starbelter.Combat
             float distance = result.Distance;
 
             // Raycast from attacker to target
-            // Note: RaycastAll doesn't detect colliders the ray starts inside of
             RaycastHit2D[] hits = Physics2D.RaycastAll(attackerPos, direction, distance);
 
             // Sort by distance (RaycastAll doesn't guarantee order)
@@ -55,36 +57,48 @@ namespace Starbelter.Combat
                 // Skip hits at distance 0 (inside collider at start)
                 if (hit.distance < 0.01f) continue;
 
-                // Check if we hit a structure
                 var structure = hit.collider.GetComponent<Structure>();
-                if (structure != null)
+                if (structure == null) continue;
+
+                float distFromAttacker = hit.distance;
+                float distFromTarget = distance - distFromAttacker;
+
+                if (structure.CoverType == CoverType.Half)
                 {
-                    float distFromAttacker = hit.distance;
+                    // Half cover only matters if someone is USING it:
+                    // - Near attacker (they peek over it) - ignore it for shooting
+                    // - Near target (they're protected by it) - counts as partial cover
+                    // - In the middle of nowhere - ignore entirely
 
-                    // Only ignore HALF cover near attacker (peeking over own cover)
-                    // Full cover ALWAYS blocks, even at close range
-                    if (structure.CoverType == CoverType.Half && distFromAttacker < ignoreHalfCoverRadius)
+                    bool nearAttacker = distFromAttacker < coverProximityRadius;
+                    bool nearTarget = distFromTarget < coverProximityRadius;
+
+                    if (nearAttacker)
                     {
-                        continue; // Skip half cover near attacker
+                        // Attacker's own cover - ignore (they peek over)
+                        continue;
                     }
-
-                    // Found cover between attacker and target
-                    result.BlockingCover = structure;
-                    result.CoverType = structure.CoverType;
-
-                    if (structure.CoverType == CoverType.Full)
+                    else if (nearTarget)
                     {
-                        result.IsBlocked = true;
-                        result.HasLineOfSight = false;
-                        Debug.Log($"[CheckLineOfSight] BLOCKED by {structure.name} at dist {distFromAttacker:F2} from attacker at {attackerPos}");
-                    }
-                    else if (structure.CoverType == CoverType.Half)
-                    {
+                        // Target's cover - counts as partial
+                        result.BlockingCover = structure;
+                        result.CoverType = CoverType.Half;
                         result.IsPartialCover = true;
-                        // Half cover doesn't fully block - shot can still be attempted
+                        break;
                     }
-
-                    // Use the first (closest) cover found
+                    else
+                    {
+                        // Middle of nowhere - ignore
+                        continue;
+                    }
+                }
+                else if (structure.CoverType == CoverType.Full)
+                {
+                    // Full cover ALWAYS blocks
+                    result.BlockingCover = structure;
+                    result.CoverType = CoverType.Full;
+                    result.IsBlocked = true;
+                    result.HasLineOfSight = false;
                     break;
                 }
             }
@@ -150,14 +164,18 @@ namespace Starbelter.Combat
         }
 
         /// <summary>
-        /// Find a position to flank a target - has LOS to target AND cover from target.
+        /// Find a position to flank a target - has LOS to target AND ideally cover.
+        /// Positions must be >3 units from ALL enemies. If no safe cover exists,
+        /// may return an open position at weapon range.
         /// </summary>
         /// <param name="attackerPos">Current attacker position</param>
         /// <param name="targetPos">Target to flank</param>
-        /// <param name="maxSearchRadius">Max distance to search for flank positions</param>
+        /// <param name="weaponRange">Weapon range (used for open flanking)</param>
         /// <param name="coverQuery">CoverQuery instance for finding cover</param>
+        /// <param name="excludeUnit">Unit to exclude from occupancy check (the flanker)</param>
+        /// <param name="attackerTeam">Team of the attacker (to find enemies)</param>
         /// <returns>FlankResult with best position found</returns>
-        public static FlankResult FindFlankPosition(Vector2 attackerPos, Vector2 targetPos, float maxSearchRadius, CoverQuery coverQuery)
+        public static FlankResult FindFlankPosition(Vector2 attackerPos, Vector2 targetPos, float weaponRange, CoverQuery coverQuery, GameObject excludeUnit = null, Team attackerTeam = Team.Neutral)
         {
             var result = new FlankResult
             {
@@ -169,55 +187,148 @@ namespace Starbelter.Combat
 
             if (coverQuery == null) return result;
 
-            // Get all cover positions within search radius
-            var coverPositions = coverQuery.GetAllCoverPositions(attackerPos, maxSearchRadius);
+            const float MIN_DISTANCE_FROM_ANY_ENEMY = 3f;
 
-            float bestScore = 0f;
+            // Get all enemies for proximity checks
+            var enemies = GetEnemyPositions(attackerTeam);
 
-            Debug.Log($"[FindFlankPosition] Searching {coverPositions.Count} cover positions within {maxSearchRadius} of attacker");
+            // First, try to find a covered flank position
+            var coverPositions = coverQuery.GetAllCoverPositions(attackerPos, weaponRange, excludeUnit);
 
-            const float MIN_DISTANCE_FROM_TARGET = 3f; // Don't flank into melee range
+            float bestCoveredScore = 0f;
+            FlankResult bestCoveredResult = result;
 
             foreach (var coverPos in coverPositions)
             {
                 Vector2 candidatePos = coverPos.WorldPosition;
 
-                // Skip if too close to current position (not really flanking)
+                // Skip if too close to current position
                 if (Vector2.Distance(candidatePos, attackerPos) < 2f) continue;
 
-                // Skip if too close to target (don't run into melee range)
-                float distToTarget = Vector2.Distance(candidatePos, targetPos);
-                if (distToTarget < MIN_DISTANCE_FROM_TARGET)
-                {
-                    Debug.Log($"[FindFlankPosition] Position {candidatePos} rejected - too close to target ({distToTarget:F1} < {MIN_DISTANCE_FROM_TARGET})");
-                    continue;
-                }
+                // Skip if too close to ANY enemy
+                if (IsTooCloseToEnemies(candidatePos, enemies, MIN_DISTANCE_FROM_ANY_ENEMY)) continue;
 
-                // Check 1: Do I have LOS to target from this position?
-                // Use larger ignore radius so we don't count the cover we're hiding behind as blocking our shot
-                // Note: This checks from tile center - actual fire point may differ slightly
+                // Must have LOS to target
                 var losToTarget = CheckLineOfSight(candidatePos, targetPos, 1.5f);
-                if (losToTarget.IsBlocked)
-                {
-                    Debug.Log($"[FindFlankPosition] Position {candidatePos} rejected - no LOS to target (blocked by {losToTarget.BlockingCover?.name} at dist {losToTarget.Distance:F1})");
-                    continue;
-                }
+                if (losToTarget.IsBlocked) continue;
 
-                Debug.Log($"[FindFlankPosition] Position {candidatePos} has LOS to target at {targetPos}");
-
-                // Check 2: Does this position have cover? (check the cover sources at this tile)
+                // Must have cover
                 bool hasCover = coverPos.CoverSources != null && coverPos.CoverSources.Count > 0;
-                if (!hasCover)
-                {
-                    Debug.Log($"[FindFlankPosition] Position {candidatePos} rejected - no cover sources");
-                    continue;
-                }
+                if (!hasCover) continue;
 
                 // Score this position
+                float score = ScoreFlankPosition(attackerPos, candidatePos, targetPos, coverPos, weaponRange, enemies);
+
+                if (score > bestCoveredScore)
+                {
+                    bestCoveredScore = score;
+                    bestCoveredResult.Found = true;
+                    bestCoveredResult.Position = candidatePos;
+                    bestCoveredResult.Score = score;
+                    bestCoveredResult.CoverAtPosition = GetBestCoverType(coverPos);
+                }
+            }
+
+            // If we found a covered position, use it
+            if (bestCoveredResult.Found)
+            {
+                return bestCoveredResult;
+            }
+
+            // No covered flank found - try open positions at weapon range
+            // This is riskier but may be the only option
+            float bestOpenScore = 0f;
+            FlankResult bestOpenResult = result;
+
+            // Sample positions in a circle around the target at weapon range
+            int sampleCount = 16;
+            float optimalRange = weaponRange * 0.7f; // Slightly inside max range
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                float angle = (i / (float)sampleCount) * 360f * Mathf.Deg2Rad;
+                Vector2 candidatePos = targetPos + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * optimalRange;
+
+                // Skip if too close to current position
+                if (Vector2.Distance(candidatePos, attackerPos) < 2f) continue;
+
+                // Skip if too close to ANY enemy
+                if (IsTooCloseToEnemies(candidatePos, enemies, MIN_DISTANCE_FROM_ANY_ENEMY)) continue;
+
+                // Must have LOS to target
+                var losToTarget = CheckLineOfSight(candidatePos, targetPos, 1.5f);
+                if (losToTarget.IsBlocked) continue;
+
+                // Score open position (lower base score since no cover)
                 float score = 0f;
 
-                // Check cover quality at this position
-                CoverType bestCoverType = CoverType.None;
+                // Prefer closer to our current position
+                float travelDist = Vector2.Distance(attackerPos, candidatePos);
+                score += (weaponRange - travelDist) / weaponRange * 20f;
+
+                // Prefer angle change (actual flanking)
+                Vector2 currentDir = (targetPos - attackerPos).normalized;
+                Vector2 newDir = (targetPos - candidatePos).normalized;
+                float angleChange = Vector2.Angle(currentDir, newDir);
+                score += (angleChange / 180f) * 15f;
+
+                // Penalize based on exposure (how many enemies can see this spot)
+                float exposurePenalty = CalculateExposure(candidatePos, enemies);
+                score -= exposurePenalty * 10f;
+
+                if (score > bestOpenScore)
+                {
+                    bestOpenScore = score;
+                    bestOpenResult.Found = true;
+                    bestOpenResult.Position = candidatePos;
+                    bestOpenResult.Score = score;
+                    bestOpenResult.CoverAtPosition = CoverType.None;
+                }
+            }
+
+            // Only use open position if score is positive (not too exposed)
+            if (bestOpenResult.Found && bestOpenResult.Score > 0f)
+            {
+                return bestOpenResult;
+            }
+
+            return result; // No valid flank position found
+        }
+
+        private static float ScoreFlankPosition(Vector2 attackerPos, Vector2 candidatePos, Vector2 targetPos,
+            CoverResult coverPos, float weaponRange, System.Collections.Generic.List<Vector2> enemies)
+        {
+            float score = 0f;
+
+            // Cover quality
+            CoverType bestCoverType = GetBestCoverType(coverPos);
+            if (bestCoverType == CoverType.Full)
+                score += 50f;
+            else if (bestCoverType == CoverType.Half)
+                score += 25f;
+
+            // Prefer closer positions (less travel)
+            float travelDist = Vector2.Distance(attackerPos, candidatePos);
+            score += (weaponRange - travelDist) / weaponRange * 30f;
+
+            // Prefer angle change (actual flanking)
+            Vector2 currentDir = (targetPos - attackerPos).normalized;
+            Vector2 newDir = (targetPos - candidatePos).normalized;
+            float angleChange = Vector2.Angle(currentDir, newDir);
+            score += (angleChange / 180f) * 20f;
+
+            // Penalize exposure
+            float exposurePenalty = CalculateExposure(candidatePos, enemies);
+            score -= exposurePenalty * 5f;
+
+            return score;
+        }
+
+        private static CoverType GetBestCoverType(CoverResult coverPos)
+        {
+            CoverType bestCoverType = CoverType.None;
+            if (coverPos.CoverSources != null)
+            {
                 foreach (var source in coverPos.CoverSources)
                 {
                     if (source.Type == CoverType.Full)
@@ -225,36 +336,56 @@ namespace Starbelter.Combat
                     else if (source.Type == CoverType.Half && bestCoverType != CoverType.Full)
                         bestCoverType = CoverType.Half;
                 }
+            }
+            return bestCoverType;
+        }
 
-                // Prefer full cover over half cover
-                if (bestCoverType == CoverType.Full)
-                    score += 50f;
-                else if (bestCoverType == CoverType.Half)
-                    score += 25f;
+        private static System.Collections.Generic.List<Vector2> GetEnemyPositions(Team myTeam)
+        {
+            var positions = new System.Collections.Generic.List<Vector2>();
 
-                // Prefer closer positions (less travel = less exposure)
-                float travelDist = Vector2.Distance(attackerPos, candidatePos);
-                score += (maxSearchRadius - travelDist) / maxSearchRadius * 30f;
+            var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            foreach (var mb in allTargets)
+            {
+                var targetable = mb as ITargetable;
+                if (targetable == null) continue;
+                if (targetable.Team == myTeam) continue;
+                if (targetable.Team == Team.Neutral) continue;
+                if (targetable.IsDead) continue;
 
-                // Prefer positions that are more "flanking" (perpendicular to current angle)
-                Vector2 currentDir = (targetPos - attackerPos).normalized;
-                Vector2 newDir = (targetPos - candidatePos).normalized;
-                float angleChange = Vector2.Angle(currentDir, newDir);
-                score += (angleChange / 180f) * 20f; // More angle change = better flank
-
-                Debug.Log($"[FindFlankPosition] Position {candidatePos} VALID - score {score}, cover {bestCoverType}");
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    result.Found = true;
-                    result.Position = candidatePos;
-                    result.Score = score;
-                    result.CoverAtPosition = bestCoverType;
-                }
+                positions.Add(targetable.Transform.position);
             }
 
-            return result;
+            return positions;
+        }
+
+        private static bool IsTooCloseToEnemies(Vector2 position, System.Collections.Generic.List<Vector2> enemies, float minDistance)
+        {
+            foreach (var enemy in enemies)
+            {
+                if (Vector2.Distance(position, enemy) < minDistance)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Calculate how exposed a position is (0-1, higher = more exposed).
+        /// Based on how many enemies have LOS to this position.
+        /// </summary>
+        private static float CalculateExposure(Vector2 position, System.Collections.Generic.List<Vector2> enemies)
+        {
+            if (enemies.Count == 0) return 0f;
+
+            int exposedCount = 0;
+            foreach (var enemy in enemies)
+            {
+                var los = CheckLineOfSight(enemy, position);
+                if (!los.IsBlocked)
+                    exposedCount++;
+            }
+
+            return (float)exposedCount / enemies.Count;
         }
 
         /// <summary>

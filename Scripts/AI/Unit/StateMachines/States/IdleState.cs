@@ -18,7 +18,36 @@ namespace Starbelter.AI
         {
             // Stop any movement
             Movement.Stop();
+
+            // Scan immediately on enter to register any visible threats
             targetScanTimer = 0f;
+            ScanForThreats();
+        }
+
+        /// <summary>
+        /// Scans for enemies and registers them as threats without transitioning states.
+        /// </summary>
+        private void ScanForThreats()
+        {
+            ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
+                .OfType<ITargetable>()
+                .ToArray();
+
+            float weaponRange = controller.WeaponRange;
+
+            foreach (var target in allTargets)
+            {
+                if (target.Transform == controller.transform) continue;
+                if (target.Team == controller.Team) continue;
+                if (controller.Team == Team.Neutral) continue;
+                if (target.IsDead) continue;
+
+                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
+                if (distance <= weaponRange && ThreatManager != null)
+                {
+                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
+            }
         }
 
         public override void Update()
@@ -88,6 +117,14 @@ namespace Starbelter.AI
 
                 // Skip dead targets
                 if (target.IsDead) continue;
+
+                float distance = Vector2.Distance(controller.transform.position, target.Transform.position);
+
+                // Register visible enemies within weapon range as threats
+                if (distance <= weaponRange && ThreatManager != null)
+                {
+                    ThreatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                }
 
                 // Calculate priority based on distance and cover
                 float priority = CombatUtils.CalculateTargetPriority(

@@ -29,6 +29,10 @@ namespace Starbelter.AI
             watchTarget = target;
         }
 
+        // Check squad threat periodically
+        private float squadThreatCheckTimer;
+        private const float SQUAD_THREAT_CHECK_INTERVAL = 0.5f;
+
         public override void Enter()
         {
             if (watchTarget != null)
@@ -37,10 +41,9 @@ namespace Starbelter.AI
             }
 
             targetScanTimer = TARGET_SCAN_INTERVAL;
+            squadThreatCheckTimer = SQUAD_THREAT_CHECK_INTERVAL;
             reactionTimer = 0f;
             isReacting = false;
-
-            Debug.Log($"[OverwatchState] {controller.name} overwatching {watchTarget?.name ?? "position"}");
         }
 
         public override void Update()
@@ -60,9 +63,9 @@ namespace Starbelter.AI
             }
 
             // Check if watch target is still valid
-            if (watchTarget == null || !watchTarget.activeInHierarchy)
+            if (watchTarget == null || !watchTarget.activeInHierarchy || IsWatchTargetDead())
             {
-                // Target gone - look for new targets
+                // Target gone or dead - look for new targets
                 GameObject newTarget = FindBestTarget();
                 if (newTarget != null)
                 {
@@ -112,6 +115,21 @@ namespace Starbelter.AI
                     return;
                 }
             }
+
+            // Check if squad is under heavy fire - switch to suppression to help
+            squadThreatCheckTimer -= Time.deltaTime;
+            if (squadThreatCheckTimer <= 0f)
+            {
+                squadThreatCheckTimer = SQUAD_THREAT_CHECK_INTERVAL;
+
+                if (controller.Squad != null && controller.Squad.IsUnderHeavyFire && watchTarget != null)
+                {
+                    // Squad needs help - switch to suppression
+                    var suppressState = new SuppressState(watchTarget);
+                    stateMachine.ChangeState(suppressState);
+                    return;
+                }
+            }
         }
 
         private void StartReaction()
@@ -127,7 +145,13 @@ namespace Starbelter.AI
             }
 
             reactionTimer = Mathf.Max(0.05f, reactionTime);
-            Debug.Log($"[OverwatchState] {controller.name} reacting! Firing in {reactionTimer:F2}s");
+        }
+
+        private bool IsWatchTargetDead()
+        {
+            if (watchTarget == null) return true;
+            var targetable = watchTarget.GetComponent<ITargetable>();
+            return targetable != null && targetable.IsDead;
         }
 
         /// <summary>

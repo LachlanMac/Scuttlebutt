@@ -26,6 +26,13 @@ namespace Starbelter.Core
 
         public bool IsInitialized { get; private set; }
 
+        // FPS tracking
+        [Header("Debug")]
+        [SerializeField] private bool logFPS = false;
+        [SerializeField] private float fpsLogInterval = 1f;
+        private float fpsTimer;
+        private int frameCount;
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -44,7 +51,27 @@ namespace Starbelter.Core
 
         private void Start()
         {
+            // Ensure consistent frame rate in editor
+            Application.targetFrameRate = 60;
+            QualitySettings.vSyncCount = 0;
+
             Initialize();
+        }
+
+        private void Update()
+        {
+            if (!logFPS) return;
+
+            frameCount++;
+            fpsTimer += Time.unscaledDeltaTime;
+
+            if (fpsTimer >= fpsLogInterval)
+            {
+                float fps = frameCount / fpsTimer;
+                Debug.Log($"[FPS] {fps:F1} (deltaTime: {Time.deltaTime:F4}, timeScale: {Time.timeScale})");
+                frameCount = 0;
+                fpsTimer = 0f;
+            }
         }
 
         /// <summary>

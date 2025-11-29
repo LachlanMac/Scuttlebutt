@@ -193,6 +193,16 @@ namespace Starbelter.Combat
             }
         }
 
+        /// <summary>
+        /// Register threat from a visible enemy (even before they shoot).
+        /// Call this when an enemy is spotted in weapon range.
+        /// </summary>
+        public void RegisterVisibleEnemy(Vector2 enemyPosition, float threatAmount = 1f)
+        {
+            Vector2 direction = (enemyPosition - (Vector2)transform.position).normalized;
+            RegisterThreat(direction, threatAmount);
+        }
+
         private void DecayThreats()
         {
             // Decay rate: full threat decays to 0 over decayTime seconds
