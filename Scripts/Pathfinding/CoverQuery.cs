@@ -272,7 +272,7 @@ namespace Starbelter.Pathfinding
 
         /// <summary>
         /// Checks if a specific position provides cover against a threat.
-        /// Performs a raycast to verify the cover is between unit and threat.
+        /// Performs a raycast to verify the cover is actually between unit and threat.
         /// </summary>
         public CoverCheckResult CheckCoverAt(Vector3 position, Vector3 threatPosition)
         {
@@ -281,45 +281,43 @@ namespace Starbelter.Pathfinding
                 return new CoverCheckResult { HasCover = false, Type = CoverType.None };
             }
 
-            var tilePos = coverBaker.WorldToTile(position);
-            var coverSources = coverBaker.GetCoverAt(tilePos);
-
-            if (coverSources.Count == 0)
-            {
-                return new CoverCheckResult { HasCover = false, Type = CoverType.None };
-            }
-
             // Direction from position to threat
             Vector2 directionToThreat = ((Vector2)(threatPosition - position)).normalized;
+            float distToThreat = Vector2.Distance(position, threatPosition);
 
-            CoverType bestCoverType = CoverType.None;
-            GameObject bestCoverObject = null;
+            // Raycast from position toward threat to find actual cover
+            // Only cover within this radius counts as "ours"
+            const float coverProximityRadius = 1.5f;
 
-            foreach (var source in coverSources)
+            RaycastHit2D[] hits = Physics2D.RaycastAll(position, directionToThreat, distToThreat);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            foreach (var hit in hits)
             {
-                // Check if this cover source is between us and the threat
-                // The cover's direction should roughly oppose the threat direction
-                float dot = Vector2.Dot(source.DirectionToCover, directionToThreat);
+                if (hit.distance < 0.1f) continue; // Skip very close hits
 
-                // dot > 0 means cover is in the direction of the threat (good!)
-                if (dot > Mathf.Cos(coverAngleTolerance * Mathf.Deg2Rad))
+                var structure = hit.collider.GetComponent<Structure>();
+                if (structure == null) continue;
+
+                // Only count this cover if it's close to our position
+                // Cover that's far away is enemy cover or no-man's-land
+                if (hit.distance > coverProximityRadius)
                 {
-                    // Cover direction aligns with threat - we're covered
-                    // No raycast needed since we already know we're at a cover tile
-                    if (source.Type == CoverType.Full || bestCoverType == CoverType.None)
-                    {
-                        bestCoverType = source.Type;
-                        bestCoverObject = source.SourceObject;
-                    }
+                    // No cover protecting us from this direction
+                    break;
                 }
+
+                // This cover is close to our position - it's protecting us
+                return new CoverCheckResult
+                {
+                    HasCover = true,
+                    Type = structure.CoverType,
+                    CoverObject = hit.collider.gameObject
+                };
             }
 
-            return new CoverCheckResult
-            {
-                HasCover = bestCoverType != CoverType.None,
-                Type = bestCoverType,
-                CoverObject = bestCoverObject
-            };
+            // No cover found between us and threat
+            return new CoverCheckResult { HasCover = false, Type = CoverType.None };
         }
 
         /// <summary>
@@ -356,97 +354,6 @@ namespace Starbelter.Pathfinding
                 .OrderByDescending(c => c.Score)
                 .ThenBy(c => c.DistanceFromUnit)
                 .ToList();
-        }
-
-        /// <summary>
-        /// Finds a position from which the unit can suppress a target.
-        /// The position must have cover from the target AND clear line of fire to the target's cover.
-        /// </summary>
-        public Vector3Int? FindSuppressPosition(Vector3 unitPosition, Vector3 targetPosition, float weaponRange, GameObject excludeUnit = null)
-        {
-            if (coverBaker == null) return null;
-
-            var candidates = GetAllCoverPositions(unitPosition, maxSearchRadius, excludeUnit);
-
-            float bestScore = float.MinValue;
-            Vector3Int? bestPosition = null;
-
-            foreach (var candidate in candidates)
-            {
-                float distToTarget = Vector3.Distance(candidate.WorldPosition, targetPosition);
-
-                // Must be in weapon range
-                if (distToTarget > weaponRange) continue;
-
-                // Must have cover facing the target
-                Vector2 dirToTarget = ((Vector2)(targetPosition - candidate.WorldPosition)).normalized;
-                bool hasCoverFromTarget = false;
-
-                foreach (var source in candidate.CoverSources)
-                {
-                    float alignment = Vector2.Dot(source.DirectionToCover, dirToTarget);
-                    if (alignment > 0.3f)
-                    {
-                        hasCoverFromTarget = true;
-                        break;
-                    }
-                }
-
-                if (!hasCoverFromTarget) continue;
-
-                // Must have clear LOS to suppress (not blocked by cover near this position)
-                if (!CanSuppressFrom(candidate.WorldPosition, targetPosition)) continue;
-
-                // Score: prefer closer to current position, reasonable range to target
-                float score = 0f;
-                score -= candidate.DistanceFromUnit * 5f; // Prefer nearby positions
-
-                // Prefer mid-range over very close or very far
-                float optimalDist = weaponRange * 0.6f;
-                float rangeDelta = Mathf.Abs(distToTarget - optimalDist);
-                score -= rangeDelta * 2f;
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestPosition = candidate.TilePosition;
-                }
-            }
-
-            return bestPosition;
-        }
-
-        /// <summary>
-        /// Checks if suppressive fire is possible from a position to a target.
-        /// Returns true if the path isn't blocked by cover near the firing position.
-        /// </summary>
-        private bool CanSuppressFrom(Vector3 firePosition, Vector3 targetPosition)
-        {
-            Vector2 direction = ((Vector2)(targetPosition - firePosition)).normalized;
-            float distance = Vector2.Distance(firePosition, targetPosition);
-
-            RaycastHit2D[] hits = Physics2D.RaycastAll(firePosition, direction, distance);
-            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-            foreach (var hit in hits)
-            {
-                if (hit.distance < 0.1f) continue;
-
-                var structure = hit.collider.GetComponent<Structure>();
-                if (structure != null && structure.CoverType == CoverType.Full)
-                {
-                    // If full cover is in first 30% of distance, we're blocked
-                    if (hit.distance < distance * 0.3f)
-                    {
-                        return false;
-                    }
-                    // Cover beyond 30% is target's cover - we can suppress it
-                    return true;
-                }
-            }
-
-            // No full cover blocking - can suppress
-            return true;
         }
 
         /// <summary>
@@ -536,28 +443,62 @@ namespace Starbelter.Pathfinding
         private float EvaluateCoverPosition(Vector3 coverPos, Vector3 threatPos, List<CoverSource> sources)
         {
             Vector2 directionToThreat = ((Vector2)(threatPos - coverPos)).normalized;
+            float distToThreat = Vector2.Distance(coverPos, threatPos);
 
-            float bestScore = 0f;
+            // Raycast from candidate position toward threat to find actual cover
+            // Only cover within this radius of the candidate position counts as "ours"
+            const float coverProximityRadius = 1.5f;
 
-            foreach (var source in sources)
+            RaycastHit2D[] hits = Physics2D.RaycastAll(coverPos, directionToThreat, distToThreat);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            CoverType verifiedCoverType = CoverType.None;
+            float verifiedAlignment = 0f;
+
+            foreach (var hit in hits)
             {
-                // How well does this cover face the threat?
-                float alignment = Vector2.Dot(source.DirectionToCover, directionToThreat);
+                if (hit.distance < 0.1f) continue; // Skip very close hits
 
-                if (alignment > 0)
+                var structure = hit.collider.GetComponent<Structure>();
+                if (structure == null) continue;
+
+                // Only count this cover if it's close to our candidate position
+                // Cover that's far away is either no-man's-land or enemy cover
+                if (hit.distance > coverProximityRadius)
                 {
-                    // Base score from alignment (0 to 1)
-                    float score = alignment;
-
-                    // Small bonus for full cover (not enough to override distance)
-                    if (source.Type == CoverType.Full)
-                        score *= 1.1f;
-
-                    bestScore = Mathf.Max(bestScore, score);
+                    // Cover is too far - not protecting this position
+                    break;
                 }
+
+                // This cover is close to our position - it's protecting us
+                // Check alignment with baked data for scoring
+                foreach (var source in sources)
+                {
+                    float alignment = Vector2.Dot(source.DirectionToCover, directionToThreat);
+                    if (alignment > verifiedAlignment)
+                    {
+                        verifiedAlignment = alignment;
+                        if (structure.CoverType == CoverType.Full)
+                            verifiedCoverType = CoverType.Full;
+                        else if (structure.CoverType == CoverType.Half && verifiedCoverType != CoverType.Full)
+                            verifiedCoverType = CoverType.Half;
+                    }
+                }
+                break; // Found our cover, stop checking
             }
 
-            return bestScore;
+            // No verified cover protecting this position
+            if (verifiedCoverType == CoverType.None || verifiedAlignment <= 0)
+            {
+                return 0f;
+            }
+
+            // Score based on verified cover
+            float score = verifiedAlignment;
+            if (verifiedCoverType == CoverType.Full)
+                score *= 1.1f;
+
+            return score;
         }
 
 #if UNITY_EDITOR

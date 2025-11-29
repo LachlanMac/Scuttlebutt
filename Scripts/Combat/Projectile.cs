@@ -33,12 +33,14 @@ namespace Starbelter.Combat
         private Rigidbody2D rb;
         private Vector2 direction;
         private Vector2 origin;
+        private GameObject sourceUnit;
 
         public float Damage => damage;
         public DamageType DamageType => damageType;
         public Team SourceTeam => sourceTeam;
         public Vector2 Direction => direction;
         public Vector2 Origin => origin;
+        public GameObject SourceUnit => sourceUnit;
 
         private void Awake()
         {
@@ -57,10 +59,12 @@ namespace Starbelter.Combat
         /// </summary>
         /// <param name="fireDirection">Normalized direction to travel</param>
         /// <param name="team">Team that fired this projectile</param>
-        public void Fire(Vector2 fireDirection, Team team)
+        /// <param name="source">The unit that fired this projectile (optional)</param>
+        public void Fire(Vector2 fireDirection, Team team, GameObject source = null)
         {
             direction = fireDirection.normalized;
             sourceTeam = team;
+            sourceUnit = source;
             origin = transform.position;
             rb.linearVelocity = direction * speed;
 
@@ -72,10 +76,10 @@ namespace Starbelter.Combat
         /// <summary>
         /// Initialize and fire the projectile with custom damage.
         /// </summary>
-        public void Fire(Vector2 fireDirection, Team team, float customDamage)
+        public void Fire(Vector2 fireDirection, Team team, float customDamage, GameObject source = null)
         {
             damage = customDamage;
-            Fire(fireDirection, team);
+            Fire(fireDirection, team, source);
         }
 
         private void OnTriggerEnter2D(Collider2D other)
@@ -123,7 +127,7 @@ namespace Starbelter.Combat
                     return; // Ignore same-team hits (no friendly fire)
                 }
 
-                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction);
+                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction, sourceUnit);
 
                 if (wasHit)
                 {

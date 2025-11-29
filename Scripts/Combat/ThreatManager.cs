@@ -1,11 +1,13 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 using Starbelter.Core;
 
 namespace Starbelter.Combat
 {
     /// <summary>
-    /// Tracks incoming threats from projectiles using 16 directional buckets.
+    /// Tracks incoming threats from projectiles using 16 directional buckets,
+    /// plus individual enemy threat scores (aggro list).
     /// Attach to a child object with a trigger Circle2D collider.
     /// </summary>
     [RequireComponent(typeof(Collider2D))]
@@ -26,6 +28,37 @@ namespace Starbelter.Combat
 
         private float[] threatLevels = new float[BUCKET_COUNT];
         private float maxThreatEver = 1f; // For normalization, tracks highest threat seen
+
+        // Individual enemy threat tracking (aggro list)
+        private Dictionary<GameObject, EnemyThreatData> enemyThreats = new Dictionary<GameObject, EnemyThreatData>();
+
+        /// <summary>
+        /// Threat data for a specific enemy.
+        /// </summary>
+        public class EnemyThreatData
+        {
+            public GameObject Enemy;
+            public int ShotsFiredAtMe;      // How many times they shot at me
+            public float LastShotTime;       // When they last shot at me
+            public float TotalDamageDealt;   // Total damage they've done to me
+
+            public float GetThreatScore(Vector3 myPosition)
+            {
+                if (Enemy == null) return 0f;
+
+                float distance = Vector3.Distance(myPosition, Enemy.transform.position);
+                float distanceScore = Mathf.Max(0, 20f - distance); // Closer = more threatening
+
+                float shotScore = ShotsFiredAtMe * 5f;
+                float damageScore = TotalDamageDealt * 0.5f;
+
+                // Recency bonus - threats from last 3 seconds are more urgent
+                float recency = Time.time - LastShotTime;
+                float recencyMultiplier = recency < 3f ? 2f : 1f;
+
+                return (distanceScore + shotScore + damageScore) * recencyMultiplier;
+            }
+        }
 
         public Team MyTeam
         {
@@ -64,6 +97,12 @@ namespace Starbelter.Combat
             Vector2 threatDirection = (other.transform.position - transform.position).normalized;
 
             RegisterThreat(threatDirection, projectile.Damage);
+
+            // Track who shot at us
+            if (projectile.SourceUnit != null)
+            {
+                RegisterEnemyShot(projectile.SourceUnit, 0f); // 0 damage since it hasn't hit yet
+            }
         }
 
         /// <summary>
@@ -191,6 +230,25 @@ namespace Starbelter.Combat
             {
                 threatLevels[i] = 0f;
             }
+            enemyThreats.Clear();
+        }
+
+        /// <summary>
+        /// Reset threat levels to a minimum value (not zero).
+        /// Used when repositioning - old threats are stale but we want to stay "engaged".
+        /// </summary>
+        public void ResetThreats(float minimumValue = 0.01f)
+        {
+            for (int i = 0; i < BUCKET_COUNT; i++)
+            {
+                threatLevels[i] = minimumValue;
+            }
+            // Keep enemy tracking but reset their shot counts
+            foreach (var data in enemyThreats.Values)
+            {
+                data.ShotsFiredAtMe = 0;
+                data.TotalDamageDealt = 0f;
+            }
         }
 
         /// <summary>
@@ -201,6 +259,84 @@ namespace Starbelter.Combat
         {
             Vector2 direction = (enemyPosition - (Vector2)transform.position).normalized;
             RegisterThreat(direction, threatAmount);
+        }
+
+        /// <summary>
+        /// Register that a specific enemy shot at us.
+        /// Called when a projectile from this enemy enters our threat zone or hits us.
+        /// </summary>
+        public void RegisterEnemyShot(GameObject enemy, float damage = 0f)
+        {
+            if (enemy == null) return;
+
+            // Clean up dead entries
+            CleanupDeadEnemies();
+
+            if (!enemyThreats.TryGetValue(enemy, out var data))
+            {
+                data = new EnemyThreatData { Enemy = enemy };
+                enemyThreats[enemy] = data;
+            }
+
+            data.ShotsFiredAtMe++;
+            data.LastShotTime = Time.time;
+            data.TotalDamageDealt += damage;
+        }
+
+        /// <summary>
+        /// Get the most dangerous enemies sorted by threat score.
+        /// </summary>
+        public List<GameObject> GetMostDangerousEnemies(int maxCount = 3)
+        {
+            CleanupDeadEnemies();
+
+            return enemyThreats.Values
+                .OrderByDescending(d => d.GetThreatScore(transform.position))
+                .Take(maxCount)
+                .Select(d => d.Enemy)
+                .Where(e => e != null)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Get threat score for a specific enemy.
+        /// </summary>
+        public float GetEnemyThreatScore(GameObject enemy)
+        {
+            if (enemy == null) return 0f;
+            if (enemyThreats.TryGetValue(enemy, out var data))
+            {
+                return data.GetThreatScore(transform.position);
+            }
+            return 0f;
+        }
+
+        /// <summary>
+        /// Remove dead or destroyed enemies from tracking.
+        /// </summary>
+        private void CleanupDeadEnemies()
+        {
+            var deadEnemies = enemyThreats.Keys
+                .Where(e => e == null || !e.activeInHierarchy)
+                .ToList();
+
+            foreach (var dead in deadEnemies)
+            {
+                enemyThreats.Remove(dead);
+            }
+
+            // Also check ITargetable.IsDead
+            var deadTargetables = enemyThreats.Keys
+                .Where(e => {
+                    var t = e.GetComponent<ITargetable>();
+                    return t != null && t.IsDead;
+                })
+                .ToList();
+
+            foreach (var dead in deadTargetables)
+            {
+                enemyThreats.Remove(dead);
+            }
         }
 
         private void DecayThreats()

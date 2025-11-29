@@ -412,5 +412,186 @@ namespace Starbelter.Combat
 
             return true;
         }
+
+        /// <summary>
+        /// Find a fighting position - a spot with cover from threats where we can shoot at enemies.
+        /// Less aggressive than flanking - doesn't require bypassing enemy cover.
+        /// </summary>
+        /// <param name="unitPos">Current unit position</param>
+        /// <param name="threatDirection">Direction threats are coming from</param>
+        /// <param name="weaponRange">Unit's weapon range</param>
+        /// <param name="coverQuery">Cover query instance</param>
+        /// <param name="excludeUnit">Unit to exclude from occupancy checks</param>
+        /// <param name="unitTeam">Unit's team</param>
+        /// <returns>FightingPositionResult with position and best target info</returns>
+        public static FightingPositionResult FindFightingPosition(
+            Vector2 unitPos,
+            Vector2 threatDirection,
+            float weaponRange,
+            Pathfinding.CoverQuery coverQuery,
+            GameObject excludeUnit = null,
+            Team unitTeam = Team.Neutral)
+        {
+            var result = new FightingPositionResult
+            {
+                Found = false,
+                Position = unitPos,
+                BestTarget = null,
+                TargetCoverType = CoverType.None,
+                Score = 0f
+            };
+
+            if (coverQuery == null) return result;
+
+            // Get all enemies
+            var enemies = GetEnemyPositions(unitTeam);
+            if (enemies.Count == 0) return result;
+
+            // Get all cover positions within range
+            var coverPositions = coverQuery.GetAllCoverPositions(unitPos, weaponRange * 0.8f, excludeUnit);
+
+            float bestScore = float.MinValue;
+
+            foreach (var coverPos in coverPositions)
+            {
+                Vector2 candidatePos = coverPos.WorldPosition;
+
+                // Skip positions too close to current position (not worth moving)
+                if (Vector2.Distance(candidatePos, unitPos) < 1.5f) continue;
+
+                // Skip positions too close to enemies
+                if (IsTooCloseToEnemies(candidatePos, enemies, 3f)) continue;
+
+                // Check if this position has cover facing the threat direction
+                bool hasCoverFromThreat = false;
+                CoverType coverType = CoverType.None;
+
+                if (coverPos.CoverSources != null)
+                {
+                    foreach (var source in coverPos.CoverSources)
+                    {
+                        // Cover direction should align with threat direction
+                        float alignment = Vector2.Dot(source.DirectionToCover, threatDirection);
+                        if (alignment > 0.3f)
+                        {
+                            hasCoverFromThreat = true;
+                            if (source.Type == CoverType.Full)
+                                coverType = CoverType.Full;
+                            else if (source.Type == CoverType.Half && coverType != CoverType.Full)
+                                coverType = CoverType.Half;
+                        }
+                    }
+                }
+
+                if (!hasCoverFromThreat) continue;
+
+                // Find best target we can shoot from this position
+                GameObject bestTargetFromHere = null;
+                CoverType bestTargetCover = CoverType.None;
+                float targetScore = 0f;
+
+                foreach (var enemyPos in enemies)
+                {
+                    float distToEnemy = Vector2.Distance(candidatePos, enemyPos);
+                    if (distToEnemy > weaponRange) continue;
+
+                    // Check LOS - we want to be able to shoot, but enemy may have cover
+                    var los = CheckLineOfSight(candidatePos, enemyPos, 1.5f);
+
+                    // Score this target - prefer exposed or half-cover targets
+                    float thisTargetScore = 0f;
+
+                    if (!los.IsBlocked)
+                    {
+                        // Clear shot!
+                        thisTargetScore = 100f;
+                    }
+                    else if (los.CoverType == CoverType.Half)
+                    {
+                        // Half cover - still a decent shot
+                        thisTargetScore = 50f;
+                    }
+                    else
+                    {
+                        // Full cover - can still suppress but not ideal
+                        thisTargetScore = 10f;
+                    }
+
+                    // Prefer closer targets
+                    thisTargetScore += (weaponRange - distToEnemy) / weaponRange * 20f;
+
+                    if (thisTargetScore > targetScore)
+                    {
+                        targetScore = thisTargetScore;
+                        bestTargetFromHere = FindEnemyAtPosition(enemyPos, unitTeam);
+                        bestTargetCover = los.IsBlocked ? los.CoverType : CoverType.None;
+                    }
+                }
+
+                // Skip positions with no shootable targets
+                if (bestTargetFromHere == null) continue;
+
+                // Score this position
+                float positionScore = targetScore;
+
+                // Bonus for our cover quality
+                if (coverType == CoverType.Full)
+                    positionScore += 40f;
+                else if (coverType == CoverType.Half)
+                    positionScore += 20f;
+
+                // Prefer closer positions (less travel time)
+                float travelDist = Vector2.Distance(unitPos, candidatePos);
+                positionScore -= travelDist * 5f;
+
+                if (positionScore > bestScore)
+                {
+                    bestScore = positionScore;
+                    result.Found = true;
+                    result.Position = candidatePos;
+                    result.BestTarget = bestTargetFromHere;
+                    result.TargetCoverType = bestTargetCover;
+                    result.Score = positionScore;
+                    result.OurCoverType = coverType;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Find the enemy GameObject at a specific position.
+        /// </summary>
+        private static GameObject FindEnemyAtPosition(Vector2 position, Team myTeam)
+        {
+            var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            foreach (var mb in allTargets)
+            {
+                var targetable = mb as ITargetable;
+                if (targetable == null) continue;
+                if (targetable.Team == myTeam) continue;
+                if (targetable.Team == Team.Neutral) continue;
+                if (targetable.IsDead) continue;
+
+                if (Vector2.Distance(targetable.Transform.position, position) < 0.5f)
+                {
+                    return targetable.Transform.gameObject;
+                }
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Result of FindFightingPosition search.
+    /// </summary>
+    public struct FightingPositionResult
+    {
+        public bool Found;
+        public Vector2 Position;
+        public GameObject BestTarget;
+        public CoverType TargetCoverType;  // Cover the target has from our position
+        public CoverType OurCoverType;     // Cover we have at this position
+        public float Score;
     }
 }

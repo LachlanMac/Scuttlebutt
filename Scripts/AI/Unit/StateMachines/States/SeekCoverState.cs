@@ -92,6 +92,7 @@ namespace Starbelter.AI
                 if (giveUpTimer <= 0f)
                 {
                     // Couldn't find cover after waiting, go to combat anyway (fight in the open)
+                    Debug.Log($"[{controller.name}] SeekCoverState: Gave up finding cover, fighting in open");
                     var combatState = new CombatState(alreadyAtCover: true); // Prevent re-seeking
                     stateMachine.ChangeState(combatState);
                 }

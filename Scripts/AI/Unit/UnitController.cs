@@ -261,10 +261,12 @@ namespace Starbelter.AI
             // Don't react to flanking too frequently - prevents jittering
             if (Time.time - lastFlankResponseTime < FLANK_RESPONSE_COOLDOWN)
             {
+                Debug.Log($"[{name}] OnFlanked: Cooldown active, ignoring ({Time.time - lastFlankResponseTime:F1}s since last)");
                 return;
             }
             lastFlankResponseTime = Time.time;
 
+            Debug.Log($"[{name}] OnFlanked: Seeking cover from direction {flankDirection}");
             // Force seek new cover that protects from the flanking direction
             var seekCoverState = new SeekCoverState(flankDirection);
             stateMachine.ChangeState(seekCoverState);
@@ -341,6 +343,19 @@ namespace Starbelter.AI
         public string GetCurrentStateName()
         {
             return stateMachine.CurrentStateName;
+        }
+
+        /// <summary>
+        /// Command this unit to suppress a specific target.
+        /// Called by SquadController for coordinated suppression.
+        /// </summary>
+        public void CommandSuppress(GameObject target)
+        {
+            if (target == null || IsDead) return;
+
+            Debug.Log($"[{name}] CommandSuppress: Ordered to suppress {target.name}");
+            var suppressState = new SuppressState(target);
+            stateMachine.ChangeState(suppressState);
         }
 
 #if UNITY_EDITOR

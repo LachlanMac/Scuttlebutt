@@ -37,6 +37,8 @@ namespace Starbelter.AI
             // Don't change state if unit is dead
             if (controller.IsDead) return;
 
+            string oldState = CurrentStateName;
+
             // Exit current state
             currentState?.Exit();
 
@@ -44,6 +46,8 @@ namespace Starbelter.AI
             currentState = new T();
             currentState.Initialize(controller, this);
             currentState.Enter();
+
+            Debug.Log($"[{controller.name}] {oldState} -> {CurrentStateName}");
         }
 
         /// <summary>
@@ -54,6 +58,8 @@ namespace Starbelter.AI
             // Don't change state if unit is dead
             if (controller.IsDead) return;
 
+            string oldState = CurrentStateName;
+
             // Exit current state
             currentState?.Exit();
 
@@ -61,6 +67,8 @@ namespace Starbelter.AI
             currentState = newState;
             currentState.Initialize(controller, this);
             currentState.Enter();
+
+            Debug.Log($"[{controller.name}] {oldState} -> {CurrentStateName}");
         }
     }
 }

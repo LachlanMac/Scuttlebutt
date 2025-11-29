@@ -6,18 +6,12 @@ using Starbelter.Pathfinding;
 namespace Starbelter.AI
 {
     /// <summary>
-    /// Unit moves to a position where it can fire at a target's cover, then fires rapidly.
+    /// Unit fires rapidly at a target's cover to keep them pinned.
+    /// Only suppresses from current position - does NOT move.
     /// Fires 3x faster than normal with reduced accuracy.
     /// </summary>
     public class SuppressState : UnitState
     {
-        private enum SuppressPhase
-        {
-            SeekingPosition,  // Moving to a spot where we can suppress
-            Suppressing       // Actively firing
-        }
-
-        private SuppressPhase phase;
         private GameObject suppressTarget;
         private Vector2 suppressPosition;
 
@@ -36,11 +30,9 @@ namespace Starbelter.AI
         private float targetCheckTimer;
         private const float TARGET_CHECK_INTERVAL = 0.5f;
 
-        // Position seeking
-        private float positionRetryTimer;
-        private const float POSITION_RETRY_INTERVAL = 0.5f;
-        private float giveUpTimer;
-        private const float GIVE_UP_TIME = 3f;
+        // Track if target was in full cover when we started
+        // Only switch to combat if they were hidden and now exposed
+        private bool targetWasInFullCover;
 
         public SuppressState(GameObject target)
         {
@@ -51,24 +43,30 @@ namespace Starbelter.AI
         {
             if (suppressTarget == null)
             {
+                Debug.Log($"[{controller.name}] SuppressState: No target, exiting");
                 ChangeState<CombatState>();
                 return;
             }
 
             suppressPosition = suppressTarget.transform.position;
 
-            // Check if we can already suppress from here
+            // Check if target is currently in full cover
+            var los = CombatUtils.CheckLineOfSight(controller.FirePosition, suppressPosition);
+            targetWasInFullCover = los.IsBlocked;
+
+            // Only suppress if we can do it from current position
+            // Moving to suppress is flanking behavior, not suppression
             if (CanSuppressTarget())
             {
+                Debug.Log($"[{controller.name}] SuppressState: Can suppress from current position, starting (target in full cover: {targetWasInFullCover})");
                 StartSuppressing();
             }
             else
             {
-                // Need to find a position to suppress from
-                phase = SuppressPhase.SeekingPosition;
-                giveUpTimer = GIVE_UP_TIME;
-                positionRetryTimer = 0f;
-                FindSuppressPosition();
+                // Can't suppress from here - go to overwatch instead
+                Debug.Log($"[{controller.name}] SuppressState: Can't suppress from here, going to overwatch");
+                var overwatchState = new OverwatchState(suppressTarget, fromFailedSuppression: true);
+                stateMachine.ChangeState(overwatchState);
             }
         }
 
@@ -82,87 +80,50 @@ namespace Starbelter.AI
             }
 
             suppressPosition = suppressTarget.transform.position;
-
-            if (phase == SuppressPhase.SeekingPosition)
-            {
-                UpdateSeekingPosition();
-            }
-            else
-            {
-                UpdateSuppressing();
-            }
-        }
-
-        private void UpdateSeekingPosition()
-        {
-            // Check if we've arrived and can now suppress
-            if (!Movement.IsMoving)
-            {
-                if (CanSuppressTarget())
-                {
-                    StartSuppressing();
-                    return;
-                }
-
-                // Still can't suppress - retry finding position
-                positionRetryTimer -= Time.deltaTime;
-                if (positionRetryTimer <= 0f)
-                {
-                    positionRetryTimer = POSITION_RETRY_INTERVAL;
-                    FindSuppressPosition();
-                }
-            }
-
-            // Give up after a while
-            giveUpTimer -= Time.deltaTime;
-            if (giveUpTimer <= 0f)
-            {
-                // Couldn't find suppress position - go to combat instead
-                ChangeState<CombatState>();
-                return;
-            }
+            UpdateSuppressing();
         }
 
         private void UpdateSuppressing()
         {
             suppressDuration += Time.deltaTime;
 
-            // Check if target is now exposed - take a real shot
+            // Check if target is now exposed - but only react if they were in full cover before
+            // Don't exit just because we started suppressing a target in half cover
             var los = CombatUtils.CheckLineOfSight(
                 controller.FirePosition,
                 suppressPosition
             );
 
-            if (!los.IsBlocked)
+            if (targetWasInFullCover && !los.IsBlocked)
             {
+                // Target WAS in full cover but is now exposed - take a real shot!
+                Debug.Log($"[{controller.name}] SuppressState: Target exposed from full cover, switching to combat");
                 var combatState = new CombatState(suppressTarget);
                 stateMachine.ChangeState(combatState);
                 return;
             }
 
-            // Check if we can still suppress
+            // Check if we can still suppress (own cover might now block)
             if (!CanSuppressTarget())
             {
-                // Lost angle - find new position
-                phase = SuppressPhase.SeekingPosition;
-                giveUpTimer = GIVE_UP_TIME;
-                positionRetryTimer = 0f;
-                FindSuppressPosition();
+                // Lost angle - go to overwatch
+                var overwatchState = new OverwatchState(suppressTarget, fromFailedSuppression: true);
+                stateMachine.ChangeState(overwatchState);
                 return;
             }
 
             // Stop suppressing if taking too much fire
-            if (ThreatManager != null && ThreatManager.GetTotalThreat() > 5f)
+            if (ThreatManager != null && ThreatManager.GetTotalThreat() > 30f)
             {
                 ChangeState<SeekCoverState>();
                 return;
             }
 
-            // Max suppression time reached
+            // Max suppression time reached - go to overwatch
             if (suppressDuration > MAX_SUPPRESS_TIME)
             {
-                var flankState = new FlankState(suppressTarget);
-                stateMachine.ChangeState(flankState);
+                var overwatchState = new OverwatchState(suppressTarget);
+                stateMachine.ChangeState(overwatchState);
                 return;
             }
 
@@ -192,31 +153,9 @@ namespace Starbelter.AI
 
         private void StartSuppressing()
         {
-            phase = SuppressPhase.Suppressing;
             fireTimer = 0f;
             suppressDuration = 0f;
             targetCheckTimer = TARGET_CHECK_INTERVAL;
-        }
-
-        private void FindSuppressPosition()
-        {
-            var coverQuery = CoverQuery.Instance;
-            if (coverQuery == null) return;
-
-            // Find a position that has:
-            // 1. Cover from the target direction
-            // 2. Clear LOS to the target's cover (not blocked by our own cover)
-            var result = coverQuery.FindSuppressPosition(
-                controller.transform.position,
-                suppressPosition,
-                controller.WeaponRange,
-                controller.gameObject
-            );
-
-            if (result.HasValue)
-            {
-                Movement.MoveToTile(result.Value);
-            }
         }
 
         private bool IsSuppressTargetDead()
@@ -299,7 +238,7 @@ namespace Starbelter.AI
             var projectile = projectileObj.GetComponent<Projectile>();
             if (projectile != null)
             {
-                projectile.Fire(finalDirection, controller.Team);
+                projectile.Fire(finalDirection, controller.Team, controller.gameObject);
             }
             else
             {
@@ -318,6 +257,9 @@ namespace Starbelter.AI
                 if (targetable.Transform == controller.transform) continue;
                 if (targetable.Team == controller.Team) continue;
                 if (targetable.IsDead) continue;
+
+                // Skip the target we're currently suppressing - don't switch off for them
+                if (suppressTarget != null && targetable.Transform.gameObject == suppressTarget) continue;
 
                 float dist = Vector3.Distance(controller.transform.position, targetable.Transform.position);
                 if (dist > controller.WeaponRange) continue;

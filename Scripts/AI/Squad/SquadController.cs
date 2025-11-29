@@ -1,6 +1,9 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 using Starbelter.Core;
+using Starbelter.Combat;
+using Starbelter.Pathfinding;
 
 namespace Starbelter.AI
 {
@@ -23,6 +26,11 @@ namespace Starbelter.AI
 
         private List<UnitController> members = new List<UnitController>();
         private UnitController leader;
+
+        // Suppression tracking - one suppressor per target
+        private Dictionary<GameObject, UnitController> activeSuppressions = new Dictionary<GameObject, UnitController>();
+        private float suppressionCheckTimer;
+        private const float SUPPRESSION_CHECK_INTERVAL = 1f;
 
         public Team Team => team;
         public IReadOnlyList<UnitController> Members => members;
@@ -52,14 +60,189 @@ namespace Starbelter.AI
         /// </summary>
         public bool IsUnderHeavyFire => SquadThreatLevel > highThreatThreshold;
 
+        /// <summary>
+        /// Returns true if any squad member has active threats - squad is in combat.
+        /// </summary>
+        public bool IsEngaged
+        {
+            get
+            {
+                foreach (var member in members)
+                {
+                    if (member != null && !member.IsDead && member.ThreatManager != null)
+                    {
+                        if (member.ThreatManager.GetTotalThreat() > 0f)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+
         private void Start()
         {
+            // Delay enemy squad spawn to let allies get into position first
+            if (team == Team.Enemy)
+            {
+                StartCoroutine(DelayedSpawn(5f));
+            }
+            else
+            {
+                SpawnSquad();
+            }
+        }
+
+        private System.Collections.IEnumerator DelayedSpawn(float delay)
+        {
+            yield return new WaitForSeconds(delay);
             SpawnSquad();
         }
 
         private void Update()
         {
             //Debug.Log($"{gameObject.name} THREAT: {SquadThreatLevel:F1} {(IsUnderHeavyFire ? "[HEAVY FIRE]" : "")}");
+
+            // Periodically check for suppression opportunities
+            suppressionCheckTimer -= Time.deltaTime;
+            if (suppressionCheckTimer <= 0f)
+            {
+                suppressionCheckTimer = SUPPRESSION_CHECK_INTERVAL;
+                CleanupSuppressions();
+                AssignSuppressions();
+            }
+        }
+
+        /// <summary>
+        /// Clean up suppression assignments for dead targets or dead/busy suppressors.
+        /// </summary>
+        private void CleanupSuppressions()
+        {
+            var toRemove = new List<GameObject>();
+
+            foreach (var kvp in activeSuppressions)
+            {
+                var target = kvp.Key;
+                var suppressor = kvp.Value;
+
+                // Remove if target is gone/dead
+                if (target == null || !target.activeInHierarchy)
+                {
+                    toRemove.Add(target);
+                    continue;
+                }
+
+                var targetable = target.GetComponent<ITargetable>();
+                if (targetable != null && targetable.IsDead)
+                {
+                    toRemove.Add(target);
+                    continue;
+                }
+
+                // Remove if suppressor is gone/dead/no longer suppressing
+                if (suppressor == null || suppressor.IsDead)
+                {
+                    toRemove.Add(target);
+                    continue;
+                }
+
+                // Check if suppressor is still in SuppressState
+                if (suppressor.GetCurrentStateName() != "SuppressState")
+                {
+                    toRemove.Add(target);
+                }
+            }
+
+            foreach (var target in toRemove)
+            {
+                activeSuppressions.Remove(target);
+            }
+        }
+
+        /// <summary>
+        /// Find high-threat enemies in cover and assign suppressors.
+        /// </summary>
+        private void AssignSuppressions()
+        {
+            // Only assign suppression if squad is engaged
+            if (!IsEngaged) return;
+
+            // Find dangerous enemies that are in cover and not already suppressed
+            var dangerousEnemies = FindDangerousEnemiesInCover();
+
+            foreach (var enemy in dangerousEnemies)
+            {
+                // Skip if already being suppressed
+                if (activeSuppressions.ContainsKey(enemy)) continue;
+
+                // Find a unit to suppress this enemy
+                var suppressor = FindBestSuppressor(enemy);
+                if (suppressor != null)
+                {
+                    // Assign suppression
+                    activeSuppressions[enemy] = suppressor;
+                    Debug.Log($"[{gameObject.name}] Assigning {suppressor.name} to suppress {enemy.name}");
+
+                    // Command the unit to suppress
+                    suppressor.CommandSuppress(enemy);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Find enemies that are dangerous (have shot at us) and are in cover.
+        /// </summary>
+        private List<GameObject> FindDangerousEnemiesInCover()
+        {
+            var result = new List<GameObject>();
+
+            // Collect all enemies that have shot at any squad member
+            var allDangerousEnemies = new HashSet<GameObject>();
+            foreach (var member in GetLivingMembers())
+            {
+                if (member.ThreatManager != null)
+                {
+                    var dangerous = member.ThreatManager.GetMostDangerousEnemies(3);
+                    foreach (var enemy in dangerous)
+                    {
+                        if (enemy != null) allDangerousEnemies.Add(enemy);
+                    }
+                }
+            }
+
+            // Filter to enemies that are in cover (can't be easily shot)
+            foreach (var enemy in allDangerousEnemies)
+            {
+                // Check if any of our units have clear LOS to this enemy
+                bool enemyIsExposed = false;
+                foreach (var member in GetLivingMembers())
+                {
+                    var los = CombatUtils.CheckLineOfSight(member.FirePosition, enemy.transform.position);
+                    if (!los.IsBlocked)
+                    {
+                        enemyIsExposed = true;
+                        break;
+                    }
+                }
+
+                // If no one has clear LOS, enemy is in cover - candidate for suppression
+                if (!enemyIsExposed)
+                {
+                    result.Add(enemy);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Find the best unit to suppress a target.
+        /// </summary>
+        private UnitController FindBestSuppressor(GameObject target)
+        {
+            var candidates = FindSuppressCandidates(target, null, 1);
+            return candidates.Count > 0 ? candidates[0] : null;
         }
 
         private void SpawnSquad()
@@ -175,6 +358,170 @@ namespace Starbelter.AI
             if (leader == null || leader.IsDead) return null;
             return leader.transform.position;
         }
+
+        #region Squad Coordination
+
+        /// <summary>
+        /// Get count of living squad members.
+        /// </summary>
+        public int LivingMemberCount => GetLivingMembers().Count;
+
+        /// <summary>
+        /// Get average health percentage of the squad.
+        /// </summary>
+        public float SquadHealthPercent
+        {
+            get
+            {
+                var living = GetLivingMembers();
+                if (living.Count == 0) return 0f;
+
+                float total = 0f;
+                foreach (var member in living)
+                {
+                    if (member.Health != null)
+                    {
+                        total += member.Health.HealthPercent;
+                    }
+                }
+                return total / living.Count;
+            }
+        }
+
+        /// <summary>
+        /// Find units that can provide suppression fire on a target.
+        /// Returns units that:
+        /// - Are alive and not the requester
+        /// - Can suppress from current position (have LOS to target's cover)
+        /// - Are in cover themselves (relatively safe)
+        /// - Have low personal threat
+        /// </summary>
+        public List<UnitController> FindSuppressCandidates(GameObject target, UnitController requester, int maxCount = 2)
+        {
+            if (target == null) return new List<UnitController>();
+
+            var candidates = new List<(UnitController unit, float score)>();
+            Vector3 targetPos = target.transform.position;
+
+            foreach (var member in GetLivingMembers())
+            {
+                // Skip requester
+                if (member == requester) continue;
+
+                // Skip units already suppressing or flanking
+                var stateName = member.GetCurrentStateName();
+                if (stateName == "SuppressState" || stateName == "FlankState") continue;
+
+                // Check if they can suppress from current position
+                if (!CanSuppressFrom(member, targetPos)) continue;
+
+                // Check if they're in cover (relatively safe)
+                if (!member.IsInCover) continue;
+
+                // Check personal threat level (don't pull someone under heavy fire)
+                float personalThreat = member.ThreatManager != null ? member.ThreatManager.GetTotalThreat() : 0f;
+                if (personalThreat > 5f) continue;
+
+                // Score: prefer low threat, good health
+                float score = 0f;
+                score -= personalThreat * 2f;
+                score += (member.Health?.HealthPercent ?? 1f) * 10f;
+
+                candidates.Add((member, score));
+            }
+
+            return candidates
+                .OrderByDescending(c => c.score)
+                .Take(maxCount)
+                .Select(c => c.unit)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Check if a unit can suppress a target from their current position.
+        /// </summary>
+        private bool CanSuppressFrom(UnitController unit, Vector3 targetPos)
+        {
+            Vector3 firePos = unit.FirePosition;
+            Vector2 direction = ((Vector2)(targetPos - firePos)).normalized;
+            float distance = Vector2.Distance(firePos, targetPos);
+
+            // Check if in weapon range
+            if (distance > unit.WeaponRange) return false;
+
+            // Raycast to see if blocked by our own cover
+            RaycastHit2D[] hits = Physics2D.RaycastAll(firePos, direction, distance);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            foreach (var hit in hits)
+            {
+                if (hit.distance < 0.1f) continue;
+
+                var structure = hit.collider.GetComponent<Structure>();
+                if (structure != null && structure.CoverType == CoverType.Full)
+                {
+                    // If full cover is in first 30% of distance, we're blocked by our own cover
+                    if (hit.distance < distance * 0.3f)
+                    {
+                        return false;
+                    }
+                    // Otherwise it's target's cover - we can suppress it
+                    return true;
+                }
+            }
+
+            return true; // No blocking cover
+        }
+
+        /// <summary>
+        /// Request suppression fire on a target. Called by a unit that needs cover.
+        /// </summary>
+        public void RequestSuppression(GameObject target, UnitController requester)
+        {
+            if (target == null) return;
+
+            var candidates = FindSuppressCandidates(target, requester, 2);
+
+            foreach (var unit in candidates)
+            {
+                Debug.Log($"[{gameObject.name}] Assigning {unit.name} to suppress {target.name}");
+                // TODO: Need a way to command units into SuppressState
+                // For now, this is just finding candidates - the actual command system comes next
+            }
+        }
+
+        /// <summary>
+        /// Check if a target is already being suppressed by this squad.
+        /// </summary>
+        public bool IsTargetBeingSuppressed(GameObject target)
+        {
+            if (target == null) return false;
+            return activeSuppressions.ContainsKey(target);
+        }
+
+        /// <summary>
+        /// Check if we're winning the engagement (for aggressive tactics).
+        /// </summary>
+        public bool IsWinningEngagement(SquadController enemySquad)
+        {
+            if (enemySquad == null) return true;
+
+            int ourCount = LivingMemberCount;
+            int theirCount = enemySquad.LivingMemberCount;
+
+            // Up by 2+ members = winning
+            if (ourCount >= theirCount + 2) return true;
+
+            // Or up by 1 with better average health
+            if (ourCount >= theirCount + 1 && SquadHealthPercent > enemySquad.SquadHealthPercent + 0.2f)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        #endregion
 
 #if UNITY_EDITOR
         private void OnDrawGizmosSelected()

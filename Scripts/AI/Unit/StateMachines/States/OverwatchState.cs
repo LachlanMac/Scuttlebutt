@@ -24,14 +24,22 @@ namespace Starbelter.AI
         private float reactionTimer;
         private bool isReacting;
 
-        public OverwatchState(GameObject target)
+        // If true, don't try to switch to suppress (came from failed suppress)
+        private bool suppressionFailed;
+
+        public OverwatchState(GameObject target, bool fromFailedSuppression = false)
         {
             watchTarget = target;
+            suppressionFailed = fromFailedSuppression;
         }
 
         // Check squad threat periodically
         private float squadThreatCheckTimer;
         private const float SQUAD_THREAT_CHECK_INTERVAL = 0.5f;
+
+        // When squad is engaged, can't sit in overwatch forever
+        private float engagedTimer;
+        private const float MAX_OVERWATCH_TIME_WHEN_ENGAGED = 3f;
 
         public override void Enter()
         {
@@ -42,6 +50,7 @@ namespace Starbelter.AI
 
             targetScanTimer = TARGET_SCAN_INTERVAL;
             squadThreatCheckTimer = SQUAD_THREAT_CHECK_INTERVAL;
+            engagedTimer = 0f;
             reactionTimer = 0f;
             isReacting = false;
         }
@@ -117,18 +126,101 @@ namespace Starbelter.AI
             }
 
             // Check if squad is under heavy fire - switch to suppression to help
-            squadThreatCheckTimer -= Time.deltaTime;
-            if (squadThreatCheckTimer <= 0f)
+            // But not if we just came from a failed suppression attempt
+            // And not if target is already being suppressed by another squadmate
+            if (!suppressionFailed)
             {
-                squadThreatCheckTimer = SQUAD_THREAT_CHECK_INTERVAL;
-
-                if (controller.Squad != null && controller.Squad.IsUnderHeavyFire && watchTarget != null)
+                squadThreatCheckTimer -= Time.deltaTime;
+                if (squadThreatCheckTimer <= 0f)
                 {
-                    // Squad needs help - switch to suppression
-                    var suppressState = new SuppressState(watchTarget);
-                    stateMachine.ChangeState(suppressState);
+                    squadThreatCheckTimer = SQUAD_THREAT_CHECK_INTERVAL;
+
+                    if (controller.Squad != null && controller.Squad.IsUnderHeavyFire && watchTarget != null)
+                    {
+                        // Check if target is already being suppressed
+                        if (!controller.Squad.IsTargetBeingSuppressed(watchTarget))
+                        {
+                            // Squad needs help - switch to suppression
+                            var suppressState = new SuppressState(watchTarget);
+                            stateMachine.ChangeState(suppressState);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // If squad is engaged in combat, can't camp in overwatch forever
+            // Must find a fighting position where we can actually contribute
+            if (controller.Squad != null && controller.Squad.IsEngaged)
+            {
+                engagedTimer += Time.deltaTime;
+                if (engagedTimer >= MAX_OVERWATCH_TIME_WHEN_ENGAGED)
+                {
+                    Debug.Log($"[{controller.name}] OverwatchState: Squad engaged for {engagedTimer:F1}s, finding fighting position");
+                    FindFightingPosition();
                     return;
                 }
+            }
+            else
+            {
+                // Reset timer if squad not engaged
+                engagedTimer = 0f;
+            }
+        }
+
+        /// <summary>
+        /// Find a cover position where we can actually shoot enemies.
+        /// Called when we've been sitting in overwatch too long during an engagement.
+        /// </summary>
+        private void FindFightingPosition()
+        {
+            // Get threat direction
+            Vector2 threatDir = Vector2.up; // Default
+            if (ThreatManager != null)
+            {
+                var dir = ThreatManager.GetHighestThreatDirection();
+                if (dir.HasValue)
+                {
+                    threatDir = dir.Value;
+                }
+            }
+            else if (watchTarget != null)
+            {
+                threatDir = ((Vector2)(watchTarget.transform.position - controller.transform.position)).normalized;
+            }
+
+            var fightingResult = CombatUtils.FindFightingPosition(
+                controller.transform.position,
+                threatDir,
+                controller.WeaponRange,
+                Pathfinding.CoverQuery.Instance,
+                controller.gameObject,
+                controller.Team
+            );
+
+            if (fightingResult.Found)
+            {
+                Debug.Log($"[{controller.name}] Found fighting position with target in {fightingResult.TargetCoverType} cover");
+
+                // Move to the fighting position
+                if (Movement.MoveTo(fightingResult.Position))
+                {
+                    // Go to RepositionState which will wait for arrival then engage
+                    var repositionState = new RepositionState(fightingResult.BestTarget);
+                    stateMachine.ChangeState(repositionState);
+                }
+                else
+                {
+                    // Movement throttled - stay in overwatch but reset timer
+                    engagedTimer = 0f;
+                }
+            }
+            else
+            {
+                // No fighting position found - try aggressive flank as last resort
+                Debug.Log($"[{controller.name}] No fighting position found, trying flank");
+                var flankState = new FlankState(watchTarget);
+                stateMachine.ChangeState(flankState);
             }
         }
 

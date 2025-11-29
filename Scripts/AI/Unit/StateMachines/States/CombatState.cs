@@ -56,6 +56,10 @@ namespace Starbelter.AI
         private float seekCoverRetryTimer;
         private const float SEEK_COVER_RETRY_INTERVAL = 0.5f;
 
+        // Cooldown after arriving at cover - don't immediately re-evaluate and run away
+        private float coverCommitTimer;
+        private const float COVER_COMMIT_TIME = 2f;
+
         public CombatPhase CurrentPhase => currentPhase;
 
         /// <summary>
@@ -106,12 +110,22 @@ namespace Starbelter.AI
             if (arrivedAtCover || controller.IsInCover)
             {
                 StartPhase(CombatPhase.InCover);
+                // If we arrived at cover (from SeekCover/Reposition), commit to it briefly
+                coverCommitTimer = arrivedAtCover ? COVER_COMMIT_TIME : 0f;
+
+                // Reset threat when arriving at new position - old threat is stale
+                // Use small value (not 0) so squad.IsEngaged still works
+                if (arrivedAtCover && ThreatManager != null)
+                {
+                    ThreatManager.ResetThreats(0.01f);
+                }
             }
             else
             {
                 StartPhase(CombatPhase.SeekingCover);
                 startedMovingToCover = SeekCover();
                 seekCoverRetryTimer = SEEK_COVER_RETRY_INTERVAL;
+                coverCommitTimer = 0f;
             }
         }
 
@@ -222,6 +236,55 @@ namespace Starbelter.AI
 
         private void UpdateInCover()
         {
+            // Tick down commit timer
+            if (coverCommitTimer > 0f)
+            {
+                coverCommitTimer -= Time.deltaTime;
+            }
+
+            // Check if we're still covered from the main threat direction
+            // Threats can change (enemies flank, new shooters)
+            // But only flee if COMPLETELY exposed - half cover is worth staying for
+            if (ThreatManager != null && ThreatManager.IsUnderFire())
+            {
+                // Check cover from the threat direction
+                var coverQuery = Pathfinding.CoverQuery.Instance;
+                if (coverQuery != null)
+                {
+                    var threatDir = ThreatManager.GetHighestThreatDirection();
+                    if (threatDir.HasValue)
+                    {
+                        Vector3 threatWorldPos = controller.transform.position +
+                            new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
+                        var coverCheck = coverQuery.CheckCoverAt(controller.transform.position, threatWorldPos);
+
+                        // Only consider fleeing if we have NO cover at all
+                        if (!coverCheck.HasCover)
+                        {
+                            // Calculate threat threshold based on bravery and commit status
+                            int bravery = controller.Character?.Bravery ?? 10;
+                            // Base threshold: 20 + bravery bonus (range 21-40)
+                            float baseThreatThreshold = 20f + (bravery * 1f);
+
+                            // If we just repositioned, require much higher threat to move again
+                            float threatMultiplier = coverCommitTimer > 0f ? 2f : 1f;
+                            float requiredThreat = baseThreatThreshold * threatMultiplier;
+
+                            float currentThreat = ThreatManager.GetTotalThreat();
+
+                            if (currentThreat > requiredThreat)
+                            {
+                                // Completely exposed with high threat - reposition!
+                                Debug.Log($"[{controller.name}] CombatState: No cover, high threat ({currentThreat:F1} > {requiredThreat:F1}), seeking cover");
+                                ChangeState<SeekCoverState>();
+                                return;
+                            }
+                        }
+                        // If we have ANY cover (half or full), stay and fight
+                    }
+                }
+            }
+
             coverWaitTimer -= Time.deltaTime;
 
             if (coverWaitTimer <= 0 && currentTarget != null)
@@ -284,7 +347,12 @@ namespace Starbelter.AI
 
             // Can't flank - decide between suppress and overwatch
             // Aggressive units prefer suppression, defensive prefer overwatch
-            bool shouldSuppress = ShouldSuppressInsteadOfOverwatch(bravery);
+            // But don't suppress if target is already being suppressed by a squadmate
+            bool targetAlreadySuppressed = controller.Squad != null &&
+                currentTarget != null &&
+                controller.Squad.IsTargetBeingSuppressed(currentTarget);
+
+            bool shouldSuppress = !targetAlreadySuppressed && ShouldSuppressInsteadOfOverwatch(bravery);
 
             if (shouldSuppress && currentTarget != null)
             {
@@ -301,10 +369,11 @@ namespace Starbelter.AI
         /// <summary>
         /// Decide if we should suppress instead of overwatch.
         /// Based on squad threat, aggression/bravery, and randomness.
+        /// Note: Caller should already check if target is being suppressed.
         /// </summary>
         private bool ShouldSuppressInsteadOfOverwatch(int bravery)
         {
-            // If squad is under heavy fire, always suppress to help teammates
+            // If squad is under heavy fire, prefer suppression (but caller checks if target is already suppressed)
             if (controller.Squad != null && controller.Squad.IsUnderHeavyFire)
             {
                 return true;
@@ -566,7 +635,7 @@ namespace Starbelter.AI
 
             if (projectile != null)
             {
-                projectile.Fire(finalDirection, controller.Team);
+                projectile.Fire(finalDirection, controller.Team, controller.gameObject);
             }
             else
             {

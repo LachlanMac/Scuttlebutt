@@ -68,7 +68,7 @@ namespace Starbelter.Combat
         /// Called when a projectile hits this unit.
         /// Returns true if damage was applied, false if dodged.
         /// </summary>
-        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection)
+        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection, GameObject attacker = null)
         {
             if (IsDead) return false;
 
@@ -90,6 +90,12 @@ namespace Starbelter.Combat
             {
                 Vector2 flankDirection = (projectileOrigin - (Vector2)unitController.transform.position).normalized;
                 OnFlanked?.Invoke(flankDirection);
+            }
+
+            // Register who hit us for aggro tracking
+            if (attacker != null && unitController != null && unitController.ThreatManager != null)
+            {
+                unitController.ThreatManager.RegisterEnemyShot(attacker, damage);
             }
 
             // Apply damage with mitigation
@@ -151,6 +157,9 @@ namespace Starbelter.Combat
             {
                 Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
             }
+
+            string unitName = unitController != null ? unitController.name : gameObject.name;
+            Debug.Log($"[{unitName}] HIT for {finalDamage:F1} damage ({currentHealth:F1}/{maxHealth:F1} HP)");
 
             OnDamageTaken?.Invoke(finalDamage);
             OnHealthChanged?.Invoke(currentHealth, maxHealth);
@@ -244,6 +253,9 @@ namespace Starbelter.Combat
 
         private void Die()
         {
+            string unitName = unitController != null ? unitController.name : gameObject.name;
+            Debug.Log($"[{unitName}] DIED");
+
             // Spawn death effect
             if (deathEffectPrefab != null)
             {
