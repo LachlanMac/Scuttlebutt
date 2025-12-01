@@ -60,10 +60,18 @@ namespace Starbelter.Combat
         /// <summary>
         /// Called by Projectile to check if it should be blocked.
         /// Returns true if blocked (projectile should be destroyed).
+        /// Aimed shots halve the block chance (unless it's 100%).
         /// </summary>
         public bool TryBlockProjectile(Projectile projectile)
         {
-            bool blocked = Random.value <= blockChance;
+            // Aimed shots halve block chance, but 100% cover is still 100%
+            float effectiveBlockChance = blockChance;
+            if (projectile.IsAimedShot && blockChance < 1f)
+            {
+                effectiveBlockChance = blockChance * 0.5f;
+            }
+
+            bool blocked = Random.value <= effectiveBlockChance;
 
             if (blocked)
             {

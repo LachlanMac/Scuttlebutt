@@ -107,26 +107,53 @@ namespace Starbelter.Pathfinding
                 foreach (var source in best.Value.CoverSources)
                 {
                     float alignment = Vector2.Dot(source.DirectionToCover, threatDir);
-                    if (alignment > 0.3f)
+                    float alignThreshold = (source.Type == CoverType.Full) ? 0.7f : 0.3f;
+                    if (alignment > alignThreshold)
                     {
                         coverTypeStr = source.Type.ToString();
                         break;
                     }
                 }
 
-                // Log all cover sources at chosen position
-                var sourcesDebug = new System.Text.StringBuilder();
-                sourcesDebug.Append($"  CoverSources: ");
-                foreach (var src in best.Value.CoverSources)
+                // Log when choosing FULL cover - helps debug why units prefer it
+                if (coverTypeStr == "Full")
                 {
-                    float srcAlign = Vector2.Dot(src.DirectionToCover, threatDir);
-                    sourcesDebug.Append($"[{src.Type} dir={src.DirectionToCover} align={srcAlign:F2}] ");
-                }
+                    // Find best half cover alternative for comparison
+                    float bestHalfScore = float.MinValue;
+                    CoverResult? bestHalf = null;
+                    string bestHalfBreakdown = "";
 
-                Debug.Log($"[CoverQuery] {unitName}: Chose cover at {best.Value.TilePosition} ({coverTypeStr}) " +
-                          $"[{angleFromThreat:F0}° from threat dir] Score={bestScore:F1}\n" +
-                          $"  Breakdown: {bestReason}\n" +
-                          sourcesDebug.ToString());
+                    foreach (var (cover, score, breakdown) in topCandidates)
+                    {
+                        // Check if this candidate has aligned half cover
+                        Vector2 candThreatDir = ((Vector2)(threatPosition - cover.WorldPosition)).normalized;
+                        bool hasAlignedHalf = false;
+                        foreach (var src in cover.CoverSources)
+                        {
+                            if (src.Type == CoverType.Half && Vector2.Dot(src.DirectionToCover, candThreatDir) > 0.3f)
+                            {
+                                hasAlignedHalf = true;
+                                break;
+                            }
+                        }
+
+                        if (hasAlignedHalf && score > bestHalfScore)
+                        {
+                            bestHalfScore = score;
+                            bestHalf = cover;
+                            bestHalfBreakdown = breakdown;
+                        }
+                    }
+
+                    string halfComparison = bestHalf.HasValue
+                        ? $"Best half cover: {bestHalf.Value.TilePosition} score={bestHalfScore:F1} ({bestHalfBreakdown})"
+                        : "No half cover alternatives found";
+
+                    string modeStr = searchParams.Mode == CoverMode.Fighting ? "FIGHTING" : "DEFENSIVE";
+                    Debug.Log($"[CoverQuery] {unitName}: Chose FULL COVER at {best.Value.TilePosition} score={bestScore:F1} (mode={modeStr})\n" +
+                              $"  Breakdown: {bestReason}\n" +
+                              $"  {halfComparison}");
+                }
 
                 // Store debug info for gizmo drawing
                 lastCoverSearchUnit = excludeUnit;
@@ -136,6 +163,110 @@ namespace Starbelter.Pathfinding
             }
 
             return best;
+        }
+
+        /// <summary>
+        /// Finds the best cover position and returns it with its tactical score.
+        /// Use this when you need to compare cover quality (e.g., should I move or stay?).
+        /// </summary>
+        public (CoverResult? cover, float score) FindBestCoverWithScore(Vector3 unitPosition, Vector3 threatPosition, CoverSearchParams searchParams, float maxDistance = -1f, GameObject excludeUnit = null)
+        {
+            if (coverBaker == null) return (null, float.MinValue);
+
+            if (maxDistance <= 0) maxDistance = maxSearchRadius;
+
+            var candidates = FindCoverCandidates(unitPosition, threatPosition, maxDistance, excludeUnit);
+
+            if (candidates.Count == 0)
+            {
+                return (null, float.MinValue);
+            }
+
+            float bestScore = float.MinValue;
+            CoverResult? best = null;
+
+            foreach (var candidate in candidates)
+            {
+                var (score, _) = ScoreCoverTacticallyWithBreakdown(candidate, unitPosition, threatPosition, searchParams);
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
+
+            return (best, bestScore);
+        }
+
+        /// <summary>
+        /// Score a specific position for cover quality.
+        /// Used to evaluate current position vs potential new positions.
+        /// </summary>
+        public float ScorePositionForCover(Vector3 position, Vector3 threatPosition, CoverSearchParams searchParams)
+        {
+            if (coverBaker == null) return float.MinValue;
+
+            var tilePos = coverBaker.WorldToTile(position);
+            var coverSources = coverBaker.GetCoverAt(tilePos);
+
+            // If no cover at exact tile, check adjacent tiles (unit might be between tiles)
+            if (coverSources.Count == 0)
+            {
+                // Check tiles within 0.6 units (slightly more than half a tile)
+                float searchRadius = 0.6f;
+                var nearbyTiles = new Vector3Int[]
+                {
+                    tilePos + new Vector3Int(1, 0, 0),
+                    tilePos + new Vector3Int(-1, 0, 0),
+                    tilePos + new Vector3Int(0, 1, 0),
+                    tilePos + new Vector3Int(0, -1, 0)
+                };
+
+                foreach (var nearbyTile in nearbyTiles)
+                {
+                    var nearbyWorld = coverBaker.TileToWorld(nearbyTile);
+                    if (Vector3.Distance(position, nearbyWorld) < searchRadius)
+                    {
+                        var nearbySources = coverBaker.GetCoverAt(nearbyTile);
+                        if (nearbySources.Count > 0)
+                        {
+                            tilePos = nearbyTile;
+                            coverSources = nearbySources;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (coverSources.Count == 0)
+            {
+                Debug.Log($"[CoverQuery] ScorePositionForCover: No cover found at {position} (tile {tilePos})");
+                return float.MinValue; // No cover at this position
+            }
+
+            // Create a CoverResult for scoring
+            var coverResult = new CoverResult
+            {
+                TilePosition = tilePos,
+                WorldPosition = coverBaker.TileToWorld(tilePos),
+                DistanceFromUnit = 0f, // We're already here
+                Score = EvaluateCoverPosition(position, threatPosition, coverSources),
+                CoverSources = coverSources
+            };
+
+            if (coverResult.Score <= 0)
+            {
+                // Cover doesn't align with current highest threat, but we're still AT cover
+                // Return a low but valid score - don't return MinValue which causes panic-moving
+                // The unit has SOME cover, just not facing the "right" direction
+                // This prevents constant repositioning when threat direction changes
+                Debug.Log($"[CoverQuery] ScorePositionForCover: Cover at {tilePos} doesn't protect from current threat (alignment={coverResult.Score:F2}), using base score");
+                return 20f; // Low score but not MinValue - unit will move if better cover exists nearby
+            }
+
+            var (score, _) = ScoreCoverTacticallyWithBreakdown(coverResult, position, threatPosition, searchParams);
+            return score;
         }
 
         // Debug visualization data
@@ -189,7 +320,12 @@ namespace Starbelter.Pathfinding
             foreach (var source in cover.CoverSources)
             {
                 float sourceAlignment = Vector2.Dot(source.DirectionToCover, directionToThreat);
-                if (sourceAlignment > 0.3f)
+
+                // Full cover requires stricter alignment (0.7) - must be facing threat more directly
+                // Half cover is more forgiving (0.3) - provides partial protection from wider angles
+                float alignmentThreshold = (source.Type == CoverType.Full) ? 0.7f : 0.3f;
+
+                if (sourceAlignment > alignmentThreshold)
                 {
                     if (source.Type == CoverType.Full)
                         hasFullCover = true;
@@ -207,12 +343,21 @@ namespace Starbelter.Pathfinding
             string coverTypeStr = "";
             if (hasHalfCover)
             {
+                // Half cover: slightly preferred when aggressive (allows peeking)
                 coverTypeScore = Mathf.Lerp(25f, 35f, searchParams.Aggression);
                 coverTypeStr = "half";
             }
             else if (hasFullCover)
             {
-                coverTypeScore = Mathf.Lerp(20f, 5f, searchParams.Aggression);
+                // Full cover: base score reduced (was 20-5, now 15-0)
+                // Full cover restricts movement and limits offensive options
+                coverTypeScore = Mathf.Lerp(15f, 0f, searchParams.Aggression);
+
+                // Additional penalty for Aggressive posture - they actively avoid full cover
+                if (searchParams.Posture == Posture.Aggressive)
+                {
+                    coverTypeScore -= 10f;
+                }
                 coverTypeStr = "full";
             }
             score += coverTypeScore;
@@ -247,12 +392,12 @@ namespace Starbelter.Pathfinding
             }
             score += rangeScore;
 
-            // === ENEMY PROXIMITY PENALTY ===
-            float enemyPenalty = CalculateEnemyProximityPenalty(cover.WorldPosition, searchParams);
-            if (enemyPenalty > 0)
+            // === NEARBY UNITS SCORE (allies +5, enemies -5 each within 3 units) ===
+            float nearbyScore = CalculateNearbyUnitsScore(cover.WorldPosition, searchParams);
+            if (nearbyScore != 0)
             {
-                score -= enemyPenalty;
-                sb.Append($", enemyProx=-{enemyPenalty:F0}");
+                score += nearbyScore;
+                sb.Append($", nearby={nearbyScore:+0;-0}");
             }
 
             // === LEADER PROXIMITY BONUS ===
@@ -271,7 +416,118 @@ namespace Starbelter.Pathfinding
                 sb.Append($", rally={rallyBonus:F0}");
             }
 
+            // === LOS AND ENGAGEMENT SCORING (Mode-dependent) ===
+            var (losScore, losBreakdown, hasAnyLOS) = CalculateLOSScore(cover.WorldPosition, searchParams, hasFullCover);
+
+            if (searchParams.Mode == CoverMode.Fighting)
+            {
+                // Fighting mode: REQUIRE LOS to at least one enemy
+                if (!hasAnyLOS)
+                {
+                    return (-100f, $"REJECTED: Fighting mode - no LOS to any enemy. {sb}");
+                }
+
+                // In fighting mode, full cover without LOS should never happen (we just rejected it)
+                // But full cover WITH LOS is less penalized than normal
+                score += losScore;
+                if (!string.IsNullOrEmpty(losBreakdown))
+                {
+                    sb.Append($", {losBreakdown}");
+                }
+            }
+            else // Defensive mode
+            {
+                // Defensive mode: LOS is a bonus, not a requirement
+                // Cover protection is weighted higher (already handled by cover type scoring)
+                if (hasAnyLOS)
+                {
+                    // Bonus for having LOS even in defensive mode (can still shoot back)
+                    score += losScore * 0.5f; // Reduced weight in defensive mode
+                    if (!string.IsNullOrEmpty(losBreakdown))
+                    {
+                        sb.Append($", def_los={losScore * 0.5f:F0}");
+                    }
+                }
+                else
+                {
+                    sb.Append($", noLOS(defensive)");
+                }
+            }
+
             return (score, sb.ToString());
+        }
+
+        /// <summary>
+        /// Calculate LOS score from a prospect cover position to known enemies.
+        /// Returns (score, breakdown, hasAnyLOS).
+        /// </summary>
+        private (float score, string breakdown, bool hasAnyLOS) CalculateLOSScore(Vector3 coverPosition, CoverSearchParams searchParams, bool hasFullCover)
+        {
+            if (searchParams.KnownEnemies == null || searchParams.KnownEnemies.Count == 0)
+            {
+                // No enemies provided - can't check LOS, assume we have it
+                return (0f, "", true);
+            }
+
+            float totalScore = 0f;
+            int enemiesWithLOS = 0;
+            int clearShots = 0;
+            var breakdown = new System.Text.StringBuilder();
+
+            foreach (var enemy in searchParams.KnownEnemies)
+            {
+                if (enemy == null) continue;
+
+                var targetable = enemy.GetComponent<Core.ITargetable>();
+                if (targetable == null || targetable.IsDead) continue;
+
+                Vector3 enemyPos = enemy.transform.position;
+
+                // Check LOS from prospect position to enemy
+                var losResult = Combat.CombatUtils.CheckLineOfSight(coverPosition, enemyPos);
+
+                if (!losResult.IsBlocked)
+                {
+                    enemiesWithLOS++;
+
+                    // Check if it's a clear shot (enemy has no cover from our prospect position)
+                    if (!losResult.IsPartialCover)
+                    {
+                        clearShots++;
+                    }
+                }
+            }
+
+            bool hasAnyLOS = enemiesWithLOS > 0;
+
+            if (hasAnyLOS)
+            {
+                // Target availability bonus: +20 for having at least 1 target, +5 for each additional
+                // This prevents massive scores just from seeing lots of enemies
+                totalScore = 20f + (enemiesWithLOS - 1) * 5f;
+
+                // Clear shot bonus: +10 for first clear shot, +3 for each additional
+                if (clearShots > 0)
+                {
+                    totalScore += 10f + (clearShots - 1) * 3f;
+                }
+
+                breakdown.Append($"LOS={enemiesWithLOS}");
+                if (clearShots > 0)
+                {
+                    breakdown.Append($",clear={clearShots}");
+                }
+
+                // In Fighting mode with full cover, we found LOS - that's good but reduce full cover penalty slightly
+                // (full cover with LOS is better than full cover without)
+                if (hasFullCover && searchParams.Mode == CoverMode.Fighting)
+                {
+                    totalScore += 5f; // Small bonus for full cover that actually has a shot
+                    breakdown.Append(",fullw/LOS");
+                }
+            }
+
+            return (totalScore, breakdown.ToString(), hasAnyLOS);
         }
 
         /// <summary>
@@ -340,16 +596,23 @@ namespace Starbelter.Pathfinding
         }
 
         /// <summary>
-        /// Calculate penalty based on how many enemies are near the cover position.
-        /// Only penalize VERY close enemies - we need to be within weapon range to fight.
+        /// Calculate score modifier based on nearby units.
+        /// +5 for each ally within 3 units (safety in numbers)
+        /// -15 for each enemy within 3 units (dangerous position)
+        /// Leaders get double enemy penalty (they should stay back)
+        /// Additional steep penalty for enemies extremely close (< 1.5 units)
         /// </summary>
-        private float CalculateEnemyProximityPenalty(Vector3 coverPosition, CoverSearchParams searchParams)
+        private float CalculateNearbyUnitsScore(Vector3 coverPosition, CoverSearchParams searchParams)
         {
             // Skip if no team specified
             if (searchParams.UnitTeam == Team.Neutral) return 0f;
 
-            float totalPenalty = 0f;
-            const float extremeDangerRadius = 3f; // Only penalize extremely close enemies
+            float totalScore = 0f;
+            const float proximityRadius = 3f;
+            const float dangerRadius = 1.5f; // Extra penalty for very close enemies
+
+            // Leaders get double penalty for being near enemies - they should command from safety
+            float enemyPenaltyMult = searchParams.IsLeader ? 2f : 1f;
 
             var allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
 
@@ -357,23 +620,34 @@ namespace Starbelter.Pathfinding
             {
                 var targetable = mb as ITargetable;
                 if (targetable == null) continue;
-                if (targetable.Team == searchParams.UnitTeam) continue; // Skip allies
-                if (targetable.Team == Team.Neutral) continue; // Skip neutrals
+                if (targetable.Team == Team.Neutral) continue;
                 if (targetable.IsDead) continue;
 
                 float dist = Vector3.Distance(coverPosition, targetable.Transform.position);
 
-                if (dist < extremeDangerRadius)
+                if (dist < proximityRadius)
                 {
-                    // Extremely close enemy - big penalty, don't stand next to them
-                    // Scales from 60 at 0 dist to 0 at 3 dist
-                    float proximityFactor = 1f - (dist / extremeDangerRadius);
-                    totalPenalty += 60f * proximityFactor;
+                    if (targetable.Team == searchParams.UnitTeam)
+                    {
+                        // Ally nearby - bonus for squad cohesion
+                        totalScore += 5f;
+                    }
+                    else
+                    {
+                        // Enemy nearby - penalty (increased from -5 to -15)
+                        totalScore -= 15f * enemyPenaltyMult;
+
+                        // Extra steep penalty for enemies very close (melee range)
+                        if (dist < dangerRadius)
+                        {
+                            float dangerFactor = 1f - (dist / dangerRadius);
+                            totalScore -= 30f * dangerFactor * enemyPenaltyMult;
+                        }
+                    }
                 }
-                // No penalty for enemies at normal combat range (3+ tiles)
             }
 
-            return totalPenalty;
+            return totalScore;
         }
 
         /// <summary>
@@ -536,10 +810,10 @@ namespace Starbelter.Pathfinding
                 float distanceFromUnit = Vector3.Distance(unitPosition, worldPos);
                 if (distanceFromUnit > maxDistance) continue;
 
-                // Skip positions too close to the unit's current position
-                if (distanceFromUnit < 0.5f) continue;
+                // Include current tile (distance < 0.5) - don't skip it!
+                // This allows units to evaluate if staying put is the best option
 
-                // Skip occupied or reserved tiles
+                // Skip occupied or reserved tiles (but allow our own tile)
                 if (tileOccupancy != null && !tileOccupancy.IsTileAvailable(tilePos, excludeUnit))
                 {
                     continue;
@@ -675,6 +949,26 @@ namespace Starbelter.Pathfinding
     }
 
     /// <summary>
+    /// Mode for cover searching - affects whether LOS to enemies is required.
+    /// </summary>
+    public enum CoverMode
+    {
+        /// <summary>
+        /// Fighting mode: REQUIRES LOS to at least one enemy.
+        /// Prefers half cover. Big bonus for clear shots.
+        /// Use for normal combat positioning.
+        /// </summary>
+        Fighting,
+
+        /// <summary>
+        /// Defensive mode: Does NOT require LOS (allows retreat behind walls).
+        /// Still prefers positions with LOS, but cover protection weighted higher.
+        /// Use when retreating, overwhelmed, or critically injured.
+        /// </summary>
+        Defensive
+    }
+
+    /// <summary>
     /// Parameters for tactical cover searching that considers combat engagement.
     /// </summary>
     public struct CoverSearchParams
@@ -682,27 +976,34 @@ namespace Starbelter.Pathfinding
         public float WeaponRange;       // Max engagement range
         public float MinEngageRange;    // Minimum comfortable range (don't get too close)
         public float Aggression;        // 0-1, affects preferred distance and cover type
+        public Posture Posture;         // Actual posture enum for nuanced cover decisions
         public Team UnitTeam;           // Team of the unit seeking cover
         public Vector3? LeaderPosition; // Position of squad leader (null if no leader or is leader)
         public Vector3? RallyPoint;     // Squad rally point - units prefer positions near here
         public bool IsLeader;           // True if this unit is the squad leader
+        public CoverMode Mode;          // Fighting (requires LOS) or Defensive (allows retreat)
+        public List<GameObject> KnownEnemies; // Enemies to check LOS against
 
         /// <summary>
-        /// Create default parameters (neutral).
+        /// Create default parameters (neutral, fighting mode).
         /// </summary>
         public static CoverSearchParams Default => new CoverSearchParams
         {
             WeaponRange = 15f,
             MinEngageRange = 4f,
             Aggression = 0.5f,
+            Posture = Posture.Neutral,
             UnitTeam = Team.Neutral,
             LeaderPosition = null,
             RallyPoint = null,
-            IsLeader = false
+            IsLeader = false,
+            Mode = CoverMode.Fighting,
+            KnownEnemies = null
         };
 
         /// <summary>
         /// Create from posture and optional bravery (for Neutral posture).
+        /// Defaults to Fighting mode - use WithMode() to change.
         /// </summary>
         public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, Team team = Team.Neutral, Vector3? leaderPos = null, Vector3? rallyPoint = null, bool isLeader = false)
         {
@@ -719,11 +1020,25 @@ namespace Starbelter.Pathfinding
                 WeaponRange = weaponRange,
                 MinEngageRange = 4f,
                 Aggression = aggression,
+                Posture = posture,
                 UnitTeam = team,
                 LeaderPosition = leaderPos,
                 RallyPoint = rallyPoint,
-                IsLeader = isLeader
+                IsLeader = isLeader,
+                Mode = CoverMode.Fighting,
+                KnownEnemies = null
             };
+        }
+
+        /// <summary>
+        /// Return a copy with the specified mode and known enemies.
+        /// </summary>
+        public CoverSearchParams WithMode(CoverMode mode, List<GameObject> knownEnemies)
+        {
+            var copy = this;
+            copy.Mode = mode;
+            copy.KnownEnemies = knownEnemies;
+            return copy;
         }
     }
 }

@@ -30,14 +30,14 @@ namespace Starbelter.AI
                 controller.WeaponRange,
                 controller.Team,
                 controller.transform,
-                ThreatManager
+                PerceptionManager
             );
         }
 
         public override void Update()
         {
             // Priority 1: React to incoming fire - seek cover if exposed
-            if (ThreatManager != null && ThreatManager.IsUnderFire())
+            if (PerceptionManager != null && PerceptionManager.IsUnderFire())
             {
                 if (!IsInCoverFromThreat())
                 {
@@ -52,7 +52,20 @@ namespace Starbelter.AI
             {
                 targetScanTimer = TARGET_SCAN_INTERVAL;
 
-                GameObject target = FindTarget();
+                // Use perception system first (prefer perceived enemies)
+                // Fall back to direct detection if no perceived enemies
+                GameObject target = null;
+                if (PerceptionManager != null && PerceptionManager.HasPerceivedEnemies())
+                {
+                    target = PerceptionManager.GetClosestVisibleEnemy();
+                }
+
+                // Fall back to direct detection if perception found nothing
+                if (target == null)
+                {
+                    target = FindTarget();
+                }
+
                 if (target != null)
                 {
                     // Enemy found - enter combat
@@ -67,7 +80,7 @@ namespace Starbelter.AI
             var coverQuery = CoverQuery.Instance;
             if (coverQuery == null) return false;
 
-            Vector2? threatDir = ThreatManager.GetHighestThreatDirection();
+            Vector2? threatDir = PerceptionManager.GetHighestThreatDirection();
             if (!threatDir.HasValue) return false;
 
             Vector3 unitPos = controller.transform.position;
@@ -84,7 +97,7 @@ namespace Starbelter.AI
                 controller.WeaponRange,
                 controller.Team,
                 controller.transform,
-                ThreatManager
+                PerceptionManager
             );
         }
     }

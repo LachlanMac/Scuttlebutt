@@ -19,6 +19,10 @@ namespace Starbelter.AI
         private float threatCheckTimer;
         private const float THREAT_CHECK_INTERVAL = 0.5f;
 
+        // Give movement time to start (async path request)
+        private float waitForMovementTimer;
+        private const float WAIT_FOR_MOVEMENT_TIME = 0.3f;
+
         public FlankState(GameObject target)
         {
             flankTarget = target;
@@ -28,6 +32,7 @@ namespace Starbelter.AI
         {
             hasFlankPosition = false;
             threatCheckTimer = THREAT_CHECK_INTERVAL;
+            waitForMovementTimer = WAIT_FOR_MOVEMENT_TIME;
 
             if (flankTarget == null)
             {
@@ -71,6 +76,13 @@ namespace Starbelter.AI
         {
             if (!hasFlankPosition) return;
 
+            // Give movement time to start (path request is async)
+            if (waitForMovementTimer > 0f)
+            {
+                waitForMovementTimer -= Time.deltaTime;
+                return;
+            }
+
             // Check if target is still valid
             if (flankTarget == null || !flankTarget.activeInHierarchy || IsFlankTargetDead())
             {
@@ -104,13 +116,15 @@ namespace Starbelter.AI
                 if (los.IsBlocked)
                 {
                     // Flank failed - still no LOS, fall back to overwatch
+                    Debug.Log($"[{controller.name}] FlankState: Arrived but LOS blocked, going to overwatch");
                     var overwatchState = new OverwatchState(flankTarget);
                     stateMachine.ChangeState(overwatchState);
                     return;
                 }
 
                 // Arrived with valid LOS - engage target from THIS position
-                var combatState = new CombatState(flankTarget);
+                Debug.Log($"[{controller.name}] FlankState: Arrived with LOS to {flankTarget.name}, engaging");
+                var combatState = new CombatState(flankTarget, immediate: false, fromFlank: true);
                 stateMachine.ChangeState(combatState);
             }
         }
@@ -122,14 +136,14 @@ namespace Starbelter.AI
 
         private bool ShouldContinueFlanking()
         {
-            if (ThreatManager == null) return true;
+            if (PerceptionManager == null) return true;
 
             // If threat has increased significantly (multiple directions), abort
-            var threats = ThreatManager.GetActiveThreats(0.5f);
+            var threats = PerceptionManager.GetActiveThreats(0.5f);
             if (threats.Count > 1) return false;
 
             // If total threat is very high, abort
-            float totalThreat = ThreatManager.GetTotalThreat();
+            float totalThreat = PerceptionManager.GetTotalThreat();
             int bravery = controller.Character?.Bravery ?? 10;
             float threshold = CombatUtils.CalculateThreatThreshold(
                 CombatUtils.FLANK_ABORT_THREAT_BASE, CombatUtils.FLANK_ABORT_BRAVERY_MULT, bravery);

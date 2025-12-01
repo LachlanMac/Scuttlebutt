@@ -10,7 +10,7 @@ namespace Starbelter.AI
 
         // Convenience accessors
         protected UnitMovement Movement => controller.Movement;
-        protected Combat.ThreatManager ThreatManager => controller.ThreatManager;
+        protected Combat.PerceptionManager PerceptionManager => controller.PerceptionManager;
 
         /// <summary>
         /// Called by the state machine to inject dependencies.

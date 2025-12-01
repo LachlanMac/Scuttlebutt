@@ -40,7 +40,23 @@ namespace Starbelter.AI
         private TileOccupancy tileOccupancy;
         private UnitController unitController;
 
+        // Facing direction (for perception)
+        private Vector2 facingDirection = Vector2.right;
+
         public bool IsMoving => isMoving;
+        public Vector2 FacingDirection => facingDirection;
+
+        /// <summary>
+        /// Set facing direction toward a world position (e.g., when watching an enemy).
+        /// </summary>
+        public void FaceToward(Vector3 targetPosition)
+        {
+            Vector2 dir = (targetPosition - transform.position).normalized;
+            if (dir.sqrMagnitude > 0.01f)
+            {
+                facingDirection = dir;
+            }
+        }
         public Vector3 TargetPosition => targetPosition;
         public Vector3Int TargetTile => targetTile;
         public float MoveSpeed
@@ -69,7 +85,7 @@ namespace Starbelter.AI
 
         private void Update()
         {
-            if (!isMoving || currentPath == null) return;
+            if (!isMoving) return;
 
             FollowPath();
         }
@@ -190,10 +206,107 @@ namespace Starbelter.AI
         }
 
         /// <summary>
+        /// Stops movement at the nearest tile center (either current tile or next waypoint).
+        /// Use this instead of Stop() when interrupting movement to ensure unit ends on a valid tile.
+        /// </summary>
+        public void StopAtNearestTile()
+        {
+            if (!isMoving || currentPath == null)
+            {
+                Stop();
+                return;
+            }
+
+            // Find current tile center
+            var currentTile = tileOccupancy != null
+                ? tileOccupancy.WorldToTile(transform.position)
+                : new Vector3Int(Mathf.RoundToInt(transform.position.x), Mathf.RoundToInt(transform.position.y), 0);
+            var currentTileCenter = tileOccupancy != null
+                ? tileOccupancy.TileToWorld(currentTile)
+                : new Vector3(currentTile.x, currentTile.y, 0);
+
+            float distToCurrentTile = Vector3.Distance(transform.position, currentTileCenter);
+
+            // Find next waypoint tile center (if we have waypoints remaining)
+            Vector3 nextTileCenter = currentTileCenter;
+            float distToNextTile = float.MaxValue;
+
+            if (currentWaypoint < currentPath.vectorPath.Count)
+            {
+                var nextWaypointPos = currentPath.vectorPath[currentWaypoint];
+                var nextTile = tileOccupancy != null
+                    ? tileOccupancy.WorldToTile(nextWaypointPos)
+                    : new Vector3Int(Mathf.RoundToInt(nextWaypointPos.x), Mathf.RoundToInt(nextWaypointPos.y), 0);
+                nextTileCenter = tileOccupancy != null
+                    ? tileOccupancy.TileToWorld(nextTile)
+                    : new Vector3(nextTile.x, nextTile.y, 0);
+                distToNextTile = Vector3.Distance(transform.position, nextTileCenter);
+            }
+
+            // Pick the closer tile
+            Vector3 closestTileCenter;
+            Vector3Int closestTile;
+            if (distToCurrentTile <= distToNextTile)
+            {
+                closestTileCenter = currentTileCenter;
+                closestTile = currentTile;
+            }
+            else
+            {
+                closestTileCenter = nextTileCenter;
+                closestTile = tileOccupancy != null
+                    ? tileOccupancy.WorldToTile(nextTileCenter)
+                    : new Vector3Int(Mathf.RoundToInt(nextTileCenter.x), Mathf.RoundToInt(nextTileCenter.y), 0);
+            }
+
+            float distToClosest = Vector3.Distance(transform.position, closestTileCenter);
+
+            // If very close, just snap
+            if (distToClosest <= ARRIVAL_THRESHOLD)
+            {
+                transform.position = closestTileCenter;
+                Stop();
+                return;
+            }
+
+            // Otherwise, redirect to closest tile center
+            Debug.Log($"[{gameObject.name}] StopAtNearestTile: Redirecting to {closestTile} (dist={distToClosest:F2})");
+            targetPosition = closestTileCenter;
+            targetTile = closestTile;
+
+            // Clear the path waypoints - just go directly to tile center
+            currentPath = null;
+
+            // We'll let FollowPath handle moving to targetPosition
+            // But we need a simple path, so create a minimal one
+            isMoving = true;
+        }
+
+        /// <summary>
         /// Stops movement immediately.
         /// </summary>
         public void Stop()
         {
+            // Log if we're stopping away from a tile center
+            if (tileOccupancy != null)
+            {
+                var currentTile = tileOccupancy.WorldToTile(transform.position);
+                var tileCenter = tileOccupancy.TileToWorld(currentTile);
+                float distFromCenter = Vector3.Distance(transform.position, tileCenter);
+
+                if (distFromCenter > ARRIVAL_THRESHOLD)
+                {
+                    // Get caller info for debugging
+                    var stackTrace = new System.Diagnostics.StackTrace(1, true);
+                    var callerFrame = stackTrace.GetFrame(0);
+                    string callerInfo = callerFrame != null
+                        ? $"{callerFrame.GetMethod()?.DeclaringType?.Name}.{callerFrame.GetMethod()?.Name}"
+                        : "Unknown";
+
+                    Debug.LogWarning($"[{gameObject.name}] STOP OFF-TILE: pos={transform.position}, tile={currentTile}, center={tileCenter}, dist={distFromCenter:F2}, caller={callerInfo}");
+                }
+            }
+
             isMoving = false;
             currentPath = null;
             currentSpeed = 0f;
@@ -241,6 +354,16 @@ namespace Starbelter.AI
 
             lastPathRequestTime = Time.time;
             isMoving = true; // Set immediately so states know we're about to move
+
+            // Reset threat buckets when starting movement
+            // Old threat directions are relative to our old position and become stale
+            // We'll build up fresh threat data as we move to the new position
+            if (unitController != null && unitController.PerceptionManager != null)
+            {
+                unitController.PerceptionManager.ResetThreats(0.01f);
+                Debug.Log($"[{gameObject.name}] Movement started - reset threat buckets");
+            }
+
             seeker.StartPath(transform.position, destination, OnPathComplete);
             return true;
         }
@@ -277,12 +400,21 @@ namespace Starbelter.AI
             }
 
             // Get current waypoint or final target
-            Vector3 currentTarget = currentWaypoint < currentPath.vectorPath.Count
-                ? currentPath.vectorPath[currentWaypoint]
-                : targetPosition;
+            // If no path (e.g., from StopAtNearestTile), just go directly to targetPosition
+            Vector3 currentTarget = targetPosition;
+            if (currentPath != null && currentWaypoint < currentPath.vectorPath.Count)
+            {
+                currentTarget = currentPath.vectorPath[currentWaypoint];
+            }
 
             Vector3 direction = (currentTarget - transform.position).normalized;
             float distanceToWaypoint = Vector3.Distance(transform.position, currentTarget);
+
+            // Update facing direction
+            if (direction.sqrMagnitude > 0.01f)
+            {
+                facingDirection = new Vector2(direction.x, direction.y).normalized;
+            }
 
             // Apply acceleration based on Agility stat
             UpdateSpeed();
@@ -319,7 +451,7 @@ namespace Starbelter.AI
             }
 
             // Advance to next waypoint when close enough
-            if (distanceToWaypoint <= moveDistance && currentWaypoint < currentPath.vectorPath.Count)
+            if (currentPath != null && distanceToWaypoint <= moveDistance && currentWaypoint < currentPath.vectorPath.Count)
             {
                 currentWaypoint++;
             }

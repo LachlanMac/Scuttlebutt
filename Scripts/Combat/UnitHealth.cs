@@ -6,13 +6,10 @@ namespace Starbelter.Combat
 {
     /// <summary>
     /// Handles unit health, damage, and dodge calculations based on cover state.
+    /// Delegates actual health tracking to Character data class.
     /// </summary>
     public class UnitHealth : MonoBehaviour
     {
-        [Header("Health")]
-        [SerializeField] private float maxHealth = 100f;
-        [SerializeField] private float currentHealth;
-
         [Header("Cover Dodge Chances")]
         [Tooltip("Dodge chance when in cover and not peeking")]
         [SerializeField] private float inCoverDodgeChance = 0.8f;
@@ -27,18 +24,21 @@ namespace Starbelter.Combat
 
         // References
         private UnitController unitController;
+        private Character character;
 
         // Events
         public System.Action<float, float> OnHealthChanged; // current, max
         public System.Action<float> OnDamageTaken;
+        public System.Action<float, GameObject> OnDamageTakenWithAttacker; // damage, attacker
         public System.Action OnDeath;
         public System.Action OnDodge;
         public System.Action<Vector2> OnFlanked; // direction of flanking attack
 
-        public float CurrentHealth => currentHealth;
-        public float MaxHealth => maxHealth;
-        public float HealthPercent => maxHealth > 0 ? currentHealth / maxHealth : 0f;
-        public bool IsDead => currentHealth <= 0;
+        // Delegate to Character (default to "not dead" if character not yet assigned)
+        public float CurrentHealth => character?.CurrentHealth ?? 0f;
+        public float MaxHealth => character?.MaxHealth ?? 0f;
+        public float HealthPercent => character?.HealthPercent ?? 0f;
+        public bool IsDead => character?.IsDead ?? false;
 
         private void Awake()
         {
@@ -53,22 +53,25 @@ namespace Starbelter.Combat
 
         private void InitializeHealth()
         {
-            // Scale max health by character stat if available
-            if (unitController != null && unitController.Character != null)
+            if (unitController != null)
             {
-                float healthMultiplier = Character.StatToMultiplier(unitController.Character.Health);
-                maxHealth = 50f + (healthMultiplier * 100f); // 50-150 range
+                character = unitController.Character;
             }
 
-            currentHealth = maxHealth;
-            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+            // Initialize character health if not already done
+            if (character != null && character.MaxHealth <= 0)
+            {
+                character.InitializeHealth();
+            }
+
+            OnHealthChanged?.Invoke(CurrentHealth, MaxHealth);
         }
 
         /// <summary>
         /// Called when a projectile hits this unit.
         /// Returns true if damage was applied, false if dodged.
         /// </summary>
-        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection, GameObject attacker = null)
+        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection, GameObject attacker = null, bool isAimedShot = false)
         {
             if (IsDead) return false;
 
@@ -76,7 +79,8 @@ namespace Starbelter.Combat
             bool hasCoverFromShot = CheckCoverFromProjectile(projectileOrigin);
 
             // Calculate dodge chance based on actual cover from this shot
-            float dodgeChance = CalculateDodgeChance(hasCoverFromShot);
+            // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
+            float dodgeChance = CalculateDodgeChance(hasCoverFromShot, isAimedShot);
 
             // Roll for dodge
             if (Random.value < dodgeChance)
@@ -92,14 +96,19 @@ namespace Starbelter.Combat
                 OnFlanked?.Invoke(flankDirection);
             }
 
-            // Register who hit us for aggro tracking
-            if (attacker != null && unitController != null && unitController.ThreatManager != null)
+            // Register who hit us for aggro tracking and perception
+            // PerceptionManager handles both threat tracking and awareness
+            if (attacker != null && unitController != null && unitController.PerceptionManager != null)
             {
-                unitController.ThreatManager.RegisterEnemyShot(attacker, damage);
+                unitController.PerceptionManager.RegisterEnemyShot(attacker, damage, isAimedShot);
             }
 
             // Apply damage with mitigation
             ApplyDamage(damage, damageType);
+
+            // Invoke event with attacker info
+            OnDamageTakenWithAttacker?.Invoke(damage, attacker);
+
             return true;
         }
 
@@ -139,18 +148,9 @@ namespace Starbelter.Combat
         /// </summary>
         public void ApplyDamage(float damage, DamageType damageType)
         {
-            if (IsDead) return;
+            if (character == null || IsDead) return;
 
-            // Apply mitigation from character's armor/gear
-            float finalDamage = damage;
-            if (unitController != null && unitController.Character != null)
-            {
-                float mitigation = unitController.Character.GetMitigation(damageType) / 100f;
-                finalDamage = damage * (1f - mitigation);
-            }
-
-            currentHealth -= finalDamage;
-            currentHealth = Mathf.Max(0, currentHealth);
+            float finalDamage = character.TakeDamage(damage, damageType);
 
             // Spawn hit effect
             if (hitEffectPrefab != null)
@@ -158,13 +158,10 @@ namespace Starbelter.Combat
                 Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
             }
 
-            string unitName = unitController != null ? unitController.name : gameObject.name;
-            Debug.Log($"[{unitName}] HIT for {finalDamage:F1} damage ({currentHealth:F1}/{maxHealth:F1} HP)");
-
             OnDamageTaken?.Invoke(finalDamage);
-            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+            OnHealthChanged?.Invoke(CurrentHealth, MaxHealth);
 
-            if (currentHealth <= 0)
+            if (IsDead)
             {
                 Die();
             }
@@ -175,10 +172,9 @@ namespace Starbelter.Combat
         /// </summary>
         public void ApplyDamage(float damage)
         {
-            if (IsDead) return;
+            if (character == null || IsDead) return;
 
-            currentHealth -= damage;
-            currentHealth = Mathf.Max(0, currentHealth);
+            float finalDamage = character.TakeDamage(damage);
 
             // Spawn hit effect
             if (hitEffectPrefab != null)
@@ -186,10 +182,10 @@ namespace Starbelter.Combat
                 Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
             }
 
-            OnDamageTaken?.Invoke(damage);
-            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+            OnDamageTaken?.Invoke(finalDamage);
+            OnHealthChanged?.Invoke(CurrentHealth, MaxHealth);
 
-            if (currentHealth <= 0)
+            if (IsDead)
             {
                 Die();
             }
@@ -200,35 +196,42 @@ namespace Starbelter.Combat
         /// </summary>
         public void Heal(float amount)
         {
-            if (IsDead) return;
+            if (character == null || IsDead) return;
 
-            currentHealth += amount;
-            currentHealth = Mathf.Min(currentHealth, maxHealth);
-
-            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+            character.Heal(amount);
+            OnHealthChanged?.Invoke(CurrentHealth, MaxHealth);
         }
 
         /// <summary>
         /// Calculate dodge chance based on whether projectile crossed cover.
+        /// Aimed shots halve the cover dodge bonus (careful aim finds gaps).
         /// </summary>
-        private float CalculateDodgeChance(bool hasCoverFromShot)
+        private float CalculateDodgeChance(bool hasCoverFromShot, bool isAimedShot = false)
         {
             if (unitController == null) return 0f;
 
             bool isPeeking = unitController.IsPeeking;
 
-            float baseDodge = 0f;
+            float coverDodge = 0f;
 
             // Only get cover bonus if projectile actually crossed cover
             if (hasCoverFromShot && !isPeeking)
             {
-                baseDodge = inCoverDodgeChance;
+                coverDodge = inCoverDodgeChance;
             }
             else if (hasCoverFromShot && isPeeking)
             {
-                baseDodge = peekingDodgeChance;
+                coverDodge = peekingDodgeChance;
             }
             // No cover crossed = no cover dodge bonus
+
+            // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
+            if (isAimedShot)
+            {
+                coverDodge *= 0.5f;
+            }
+
+            float baseDodge = coverDodge;
 
             // Modify by reflex stat
             if (unitController.Character != null)
@@ -279,23 +282,15 @@ namespace Starbelter.Combat
                 }
             }
 
-            // "Ragdoll" - rotate 90 degrees to show they're dead
-            rootTransform.rotation = Quaternion.Euler(0, 0, 90f);
+            // Get character and team data before destroying
+            Character character = unitController?.Character;
+            Team team = unitController?.Team ?? Team.Neutral;
 
-            // Disable movement if present
-            var movement = rootTransform.GetComponent<AI.UnitMovement>();
-            if (movement != null)
-            {
-                movement.Stop();
-                movement.enabled = false;
-            }
+            // Create corpse with character data
+            Corpse.Create(rootTransform, character, team);
 
-            // Disable the hitbox collider so they can't be shot anymore
-            var hitboxCollider = GetComponent<Collider2D>();
-            if (hitboxCollider != null)
-            {
-                hitboxCollider.enabled = false;
-            }
+            // Destroy the unit GameObject
+            Destroy(rootTransform.gameObject);
         }
     }
 }

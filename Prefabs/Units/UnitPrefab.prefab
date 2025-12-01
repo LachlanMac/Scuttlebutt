@@ -213,16 +213,21 @@ MonoBehaviour:
   team: 2
   character:
     Name: Soldier
-    Health: 10
+    Vitality: 10
     Accuracy: 10
     Reflex: 10
     Bravery: 10
     Agility: 10
+    Perception: 10
+    Stealth: 10
+    Tactics: 10
+    MaxHealth: 0
+    CurrentHealth: 0
     PhysicalMitigation: 0
     HeatMitigation: 0
     EnergyMitigation: 0
     IonMitigation: 0
-  threatManager: {fileID: 4709284339212898409}
+  perceptionManager: {fileID: 260915795428321618}
   projectilePrefab: {fileID: 112090731843474039, guid: 5183cc8f3a64e6b458b0d415d12417be, type: 3}
   firePoint: {fileID: 0}
   weaponRange: 15
@@ -284,7 +289,7 @@ GameObject:
   m_Component:
   - component: {fileID: 424225862513127258}
   - component: {fileID: 7588101804984642559}
-  - component: {fileID: 4709284339212898409}
+  - component: {fileID: 260915795428321618}
   m_Layer: 0
   m_Name: ThreatDetector
   m_TagString: Untagged
@@ -342,8 +347,8 @@ CircleCollider2D:
   m_CompositeOperation: 0
   m_CompositeOrder: 0
   m_Offset: {x: 0, y: 0}
-  m_Radius: 3
---- !u!114 &4709284339212898409
+  m_Radius: 0.9
+--- !u!114 &260915795428321618
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -352,11 +357,15 @@ MonoBehaviour:
   m_GameObject: {fileID: 3398852621492544047}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1760250cf5526124484a5d5249094f8a, type: 3}
+  m_Script: {fileID: 11500000, guid: fb37550293a597e4c8882faa54154276, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Combat.ThreatManager
-  decayTime: 20
+  m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Combat.PerceptionManager
+  perceptionRange: 15
+  checkInterval: 1
+  memoryDuration: 3
   myTeam: 1
+  decayTime: 20
+  aimedShotDecayTime: 10
   showDebugGizmos: 1
 --- !u!1 &4800437442234653716
 GameObject:
@@ -403,8 +412,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f463ac7feb770404e9b97ac26c71524e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Combat.UnitHealth
-  maxHealth: 100
-  currentHealth: 100
   inCoverDodgeChance: 0.7
   peekingDodgeChance: 0.2
   hitEffectPrefab: {fileID: 0}

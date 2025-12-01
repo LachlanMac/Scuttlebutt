@@ -28,13 +28,17 @@ namespace Starbelter.AI
         [Tooltip("Squad will prefer fighting positions near this point. Defaults to spawn point.")]
         [SerializeField] private Transform rallyPoint;
 
+        [Header("Combat Posture")]
+        [Tooltip("Squad combat posture - affects cover selection and aggression")]
+        [SerializeField] private Posture squadPosture = Posture.Neutral;
+
         private List<UnitController> members = new List<UnitController>();
         private UnitController leader;
 
         // Suppression tracking - one suppressor per target
         private Dictionary<GameObject, UnitController> activeSuppressions = new Dictionary<GameObject, UnitController>();
         private float suppressionCheckTimer;
-        private const float SUPPRESSION_CHECK_INTERVAL = 1f;
+        private const float SUPPRESSION_CHECK_BASE_INTERVAL = 15f; // Base interval in seconds
 
         public Team Team => team;
         public IReadOnlyList<UnitController> Members => members;
@@ -63,9 +67,9 @@ namespace Starbelter.AI
                 float total = 0f;
                 foreach (var member in members)
                 {
-                    if (member != null && !member.IsDead && member.ThreatManager != null)
+                    if (member != null && !member.IsDead && member.PerceptionManager != null)
                     {
-                        total += member.ThreatManager.GetTotalThreat();
+                        total += member.PerceptionManager.GetTotalThreat();
                     }
                 }
                 return total;
@@ -102,9 +106,9 @@ namespace Starbelter.AI
             {
                 foreach (var member in members)
                 {
-                    if (member != null && !member.IsDead && member.ThreatManager != null)
+                    if (member != null && !member.IsDead && member.PerceptionManager != null)
                     {
-                        if (member.ThreatManager.GetTotalThreat() > 0f)
+                        if (member.PerceptionManager.GetTotalThreat() > 0f)
                         {
                             return true;
                         }
@@ -141,10 +145,21 @@ namespace Starbelter.AI
             suppressionCheckTimer -= Time.deltaTime;
             if (suppressionCheckTimer <= 0f)
             {
-                suppressionCheckTimer = SUPPRESSION_CHECK_INTERVAL;
+                suppressionCheckTimer = GetSuppressionCheckInterval();
                 CleanupSuppressions();
                 AssignSuppressions();
             }
+        }
+
+        /// <summary>
+        /// Get suppression check interval based on leader's Tactics stat.
+        /// Formula: 15 seconds - (Tactics / 5) = 13s at Tactics 10, 11s at Tactics 20, 14.8s at Tactics 1
+        /// </summary>
+        private float GetSuppressionCheckInterval()
+        {
+            int tactics = leader?.Character?.Tactics ?? 10;
+            float interval = SUPPRESSION_CHECK_BASE_INTERVAL - (tactics / 5f);
+            return Mathf.Max(5f, interval); // Minimum 5 seconds
         }
 
         /// <summary>
@@ -195,32 +210,115 @@ namespace Starbelter.AI
 
         /// <summary>
         /// Find high-threat enemies in cover and assign suppressors.
+        /// Prioritizes snipers (enemies using aimed shots).
         /// </summary>
         private void AssignSuppressions()
         {
             // Only assign suppression if squad is engaged
             if (!IsEngaged) return;
 
-            // Find dangerous enemies that are in cover and not already suppressed
-            var dangerousEnemies = FindDangerousEnemiesInCover();
+            int tactics = leader?.Character?.Tactics ?? 10;
+            Debug.Log($"[{gameObject.name}] SuppressionCheck: Tactics={tactics}, Interval={GetSuppressionCheckInterval():F1}s");
 
+            // First priority: Find snipers (enemies using aimed shots)
+            var snipers = FindSnipers();
+            foreach (var sniper in snipers)
+            {
+                if (activeSuppressions.ContainsKey(sniper))
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressionCheck: Sniper {sniper.name} already being suppressed");
+                    continue;
+                }
+
+                float aimedThreat = GetSquadAimedShotThreat(sniper);
+                Debug.Log($"[{gameObject.name}] SuppressionCheck: SNIPER DETECTED - {sniper.name} has {aimedThreat:F1} aimed shot threat");
+
+                var suppressor = FindBestSuppressor(sniper);
+                if (suppressor != null)
+                {
+                    activeSuppressions[sniper] = suppressor;
+                    Debug.Log($"[{gameObject.name}] SuppressionCheck: Assigning {suppressor.name} to suppress SNIPER {sniper.name}");
+                    suppressor.CommandSuppress(sniper);
+                }
+                else
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressionCheck: No valid suppressor found for sniper {sniper.name}");
+                }
+            }
+
+            // Second priority: Other dangerous enemies in cover
+            var dangerousEnemies = FindDangerousEnemiesInCover();
             foreach (var enemy in dangerousEnemies)
             {
                 // Skip if already being suppressed
                 if (activeSuppressions.ContainsKey(enemy)) continue;
 
-                // Find a unit to suppress this enemy
+                // Skip snipers (already handled above)
+                if (snipers.Contains(enemy)) continue;
+
+                Debug.Log($"[{gameObject.name}] SuppressionCheck: Dangerous enemy {enemy.name} in cover");
+
                 var suppressor = FindBestSuppressor(enemy);
                 if (suppressor != null)
                 {
-                    // Assign suppression
                     activeSuppressions[enemy] = suppressor;
-                    Debug.Log($"[{gameObject.name}] Assigning {suppressor.name} to suppress {enemy.name}");
-
-                    // Command the unit to suppress
+                    Debug.Log($"[{gameObject.name}] SuppressionCheck: Assigning {suppressor.name} to suppress {enemy.name}");
                     suppressor.CommandSuppress(enemy);
                 }
+                else
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressionCheck: No valid suppressor found for {enemy.name}");
+                }
             }
+        }
+
+        /// <summary>
+        /// Find enemies acting as snipers (aimed shot threat >= 2 for any squad member).
+        /// Unlike regular dangerous enemies, we suppress snipers even if exposed -
+        /// the goal is to disrupt their aimed shots, not just hit someone in cover.
+        /// </summary>
+        private List<GameObject> FindSnipers()
+        {
+            // Collect all snipers detected by any squad member
+            var snipers = new HashSet<GameObject>();
+
+            foreach (var member in GetLivingMembers())
+            {
+                if (member.PerceptionManager == null) continue;
+
+                foreach (var perceived in member.PerceptionManager.GetPerceivedEnemies())
+                {
+                    if (perceived.Unit == null) continue;
+                    if (perceived.IsSniper)
+                    {
+                        snipers.Add(perceived.Unit);
+                    }
+                }
+            }
+
+            if (snipers.Count > 0)
+            {
+                Debug.Log($"[{gameObject.name}] FindSnipers: {snipers.Count} snipers detected");
+            }
+
+            return snipers.ToList();
+        }
+
+        /// <summary>
+        /// Get max aimed shot threat from an enemy across all squad members.
+        /// </summary>
+        private float GetSquadAimedShotThreat(GameObject enemy)
+        {
+            float maxThreat = 0f;
+            foreach (var member in GetLivingMembers())
+            {
+                if (member.PerceptionManager != null)
+                {
+                    float threat = member.PerceptionManager.GetAimedShotThreat(enemy);
+                    if (threat > maxThreat) maxThreat = threat;
+                }
+            }
+            return maxThreat;
         }
 
         /// <summary>
@@ -234,9 +332,9 @@ namespace Starbelter.AI
             var allDangerousEnemies = new HashSet<GameObject>();
             foreach (var member in GetLivingMembers())
             {
-                if (member.ThreatManager != null)
+                if (member.PerceptionManager != null)
                 {
-                    var dangerous = member.ThreatManager.GetMostDangerousEnemies(3);
+                    var dangerous = member.PerceptionManager.GetMostDangerousEnemies(3);
                     foreach (var enemy in dangerous)
                     {
                         if (enemy != null) allDangerousEnemies.Add(enemy);
@@ -296,6 +394,25 @@ namespace Starbelter.AI
             {
                 SpawnUnit(spawnPositions[i], i);
             }
+
+            // Set squad posture on all units
+            SetSquadPosture(squadPosture);
+        }
+
+        /// <summary>
+        /// Set combat posture for all units in the squad.
+        /// </summary>
+        public void SetSquadPosture(Posture newPosture)
+        {
+            squadPosture = newPosture;
+            foreach (var member in members)
+            {
+                if (member != null && !member.IsDead)
+                {
+                    member.SetPosture(newPosture);
+                }
+            }
+            Debug.Log($"[{gameObject.name}] Squad posture set to {newPosture}");
         }
 
         private void SpawnUnit(Vector3 position, int index)
@@ -317,6 +434,12 @@ namespace Starbelter.AI
                 unitController.SetTeam(team);
                 unitController.SetSquad(this, isLeader);
                 members.Add(unitController);
+
+                // Subscribe to perception events for squad intel sharing
+                if (unitController.PerceptionManager != null)
+                {
+                    unitController.PerceptionManager.OnNewContact += (contact) => ShareIntelWithSquad(unitController, contact);
+                }
 
                 if (isLeader)
                 {
@@ -392,6 +515,30 @@ namespace Starbelter.AI
             return leader.transform.position;
         }
 
+        #region Squad Intel Sharing
+
+        /// <summary>
+        /// Share intel about a new contact with all other squad members.
+        /// </summary>
+        private void ShareIntelWithSquad(UnitController source, PerceivedUnit contact)
+        {
+            if (contact?.Unit == null) return;
+
+            foreach (var member in members)
+            {
+                // Skip dead, null, or source unit
+                if (member == null || member.IsDead || member == source) continue;
+
+                // Share intel with this member's PerceptionManager
+                if (member.PerceptionManager != null)
+                {
+                    member.PerceptionManager.ReceiveSquadIntel(contact);
+                }
+            }
+        }
+
+        #endregion
+
         #region Squad Coordination
 
         /// <summary>
@@ -425,9 +572,11 @@ namespace Starbelter.AI
         /// Find units that can provide suppression fire on a target.
         /// Returns units that:
         /// - Are alive and not the requester
+        /// - Are in CombatState (ready to engage, not moving/flanking)
         /// - Can suppress from current position (have LOS to target's cover)
         /// - Are in cover themselves (relatively safe)
         /// - Have low personal threat
+        /// Uses weighted random selection for less predictable behavior.
         /// </summary>
         public List<UnitController> FindSuppressCandidates(GameObject target, UnitController requester, int maxCount = 2)
         {
@@ -441,33 +590,88 @@ namespace Starbelter.AI
                 // Skip requester
                 if (member == requester) continue;
 
-                // Skip units already suppressing or flanking
+                // Only consider units in CombatState - they're settled and ready
                 var stateName = member.GetCurrentStateName();
-                if (stateName == "SuppressState" || stateName == "FlankState") continue;
+                if (stateName != "CombatState")
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressCandidate {member.name}: SKIP - not in CombatState ({stateName})");
+                    continue;
+                }
 
                 // Check if they can suppress from current position
-                if (!CanSuppressFrom(member, targetPos)) continue;
+                if (!CanSuppressFrom(member, targetPos))
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressCandidate {member.name}: SKIP - can't suppress from position");
+                    continue;
+                }
 
                 // Check if they're in cover (relatively safe)
-                if (!member.IsInCover) continue;
+                if (!member.IsInCover)
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressCandidate {member.name}: SKIP - not in cover");
+                    continue;
+                }
 
                 // Check personal threat level (don't pull someone under heavy fire)
-                float personalThreat = member.ThreatManager != null ? member.ThreatManager.GetTotalThreat() : 0f;
-                if (personalThreat > 5f) continue;
+                float personalThreat = member.PerceptionManager != null ? member.PerceptionManager.GetTotalThreat() : 0f;
+                if (personalThreat > 20f)
+                {
+                    Debug.Log($"[{gameObject.name}] SuppressCandidate {member.name}: SKIP - threat too high ({personalThreat:F1})");
+                    continue;
+                }
 
-                // Score: prefer low threat, good health
-                float score = 0f;
-                score -= personalThreat * 2f;
-                score += (member.Health?.HealthPercent ?? 1f) * 10f;
+                // Score: prefer low threat, good health, high accuracy
+                float score = 10f; // Base score
+                score -= personalThreat * 0.3f; // Light penalty for being under fire
+                score += (member.Health?.HealthPercent ?? 1f) * 5f; // Health bonus
+                score += (member.Character?.Accuracy ?? 10) * 0.5f; // Accuracy bonus
+
+                // Small random factor for unpredictability
+                score += Random.Range(-2f, 2f);
 
                 candidates.Add((member, score));
             }
 
-            return candidates
-                .OrderByDescending(c => c.score)
-                .Take(maxCount)
-                .Select(c => c.unit)
-                .ToList();
+            if (candidates.Count == 0) return new List<UnitController>();
+
+            // Weighted random selection instead of strict top-N
+            return WeightedRandomSelect(candidates, maxCount);
+        }
+
+        /// <summary>
+        /// Select units using weighted random (higher scores = higher chance, but not guaranteed).
+        /// </summary>
+        private List<UnitController> WeightedRandomSelect(List<(UnitController unit, float score)> candidates, int count)
+        {
+            var result = new List<UnitController>();
+            var remaining = new List<(UnitController unit, float score)>(candidates);
+
+            // Normalize scores to positive values for weighting
+            float minScore = remaining.Min(c => c.score);
+            if (minScore < 0)
+            {
+                remaining = remaining.Select(c => (c.unit, c.score - minScore + 1f)).ToList();
+            }
+
+            while (result.Count < count && remaining.Count > 0)
+            {
+                float totalWeight = remaining.Sum(c => c.score);
+                float roll = Random.Range(0f, totalWeight);
+
+                float cumulative = 0f;
+                for (int i = 0; i < remaining.Count; i++)
+                {
+                    cumulative += remaining[i].score;
+                    if (roll <= cumulative)
+                    {
+                        result.Add(remaining[i].unit);
+                        remaining.RemoveAt(i);
+                        break;
+                    }
+                }
+            }
+
+            return result;
         }
 
         /// <summary>

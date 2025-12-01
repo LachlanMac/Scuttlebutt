@@ -34,6 +34,7 @@ namespace Starbelter.Combat
         private Vector2 direction;
         private Vector2 origin;
         private GameObject sourceUnit;
+        private bool isAimedShot;
 
         public float Damage => damage;
         public DamageType DamageType => damageType;
@@ -41,6 +42,7 @@ namespace Starbelter.Combat
         public Vector2 Direction => direction;
         public Vector2 Origin => origin;
         public GameObject SourceUnit => sourceUnit;
+        public bool IsAimedShot => isAimedShot;
 
         private void Awake()
         {
@@ -52,6 +54,21 @@ namespace Starbelter.Combat
         private void Start()
         {
             Destroy(gameObject, lifetime);
+            SyncTrailColor();
+        }
+
+        /// <summary>
+        /// Sync TrailRenderer color with SpriteRenderer color.
+        /// </summary>
+        private void SyncTrailColor()
+        {
+            var sr = GetComponent<SpriteRenderer>();
+            var trail = GetComponent<TrailRenderer>();
+            if (sr != null && trail != null)
+            {
+                trail.startColor = sr.color;
+                trail.endColor = sr.color;
+            }
         }
 
         /// <summary>
@@ -82,10 +99,19 @@ namespace Starbelter.Combat
             Fire(fireDirection, team, source);
         }
 
+        /// <summary>
+        /// Mark this projectile as an aimed shot (from extended aim).
+        /// Aimed shots halve the target's cover dodge bonus.
+        /// </summary>
+        public void SetAimedShot(bool aimed)
+        {
+            isAimedShot = aimed;
+        }
+
         private void OnTriggerEnter2D(Collider2D other)
         {
-            // Don't hit threat detection colliders
-            if (other.GetComponent<ThreatManager>() != null)
+            // Don't hit perception detection colliders
+            if (other.GetComponent<PerceptionManager>() != null)
             {
                 return;
             }
@@ -127,7 +153,7 @@ namespace Starbelter.Combat
                     return; // Ignore same-team hits (no friendly fire)
                 }
 
-                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction, sourceUnit);
+                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction, sourceUnit, isAimedShot);
 
                 if (wasHit)
                 {
@@ -170,8 +196,8 @@ namespace Starbelter.Combat
 
             foreach (var col in colliders)
             {
-                // Skip ThreatDetector/ThreatManager colliders - they're huge detection zones, not units
-                if (col.GetComponent<ThreatManager>() != null) continue;
+                // Skip PerceptionManager colliders - they're huge detection zones, not units
+                if (col.GetComponent<PerceptionManager>() != null) continue;
 
                 var targetable = col.GetComponentInParent<ITargetable>();
                 if (targetable != null && targetable.Team != sourceTeam && !targetable.IsDead)

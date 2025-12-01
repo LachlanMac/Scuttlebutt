@@ -24,7 +24,7 @@ namespace Starbelter.AI
         [SerializeField] private Character character;
 
         [Header("References")]
-        [SerializeField] private ThreatManager threatManager;
+        [SerializeField] private PerceptionManager perceptionManager;
 
         [Header("Weapon")]
         [SerializeField] private GameObject projectilePrefab;
@@ -35,6 +35,12 @@ namespace Starbelter.AI
         [SerializeField] private Posture posture = Posture.Neutral;
         [Tooltip("Threat level above which unit becomes defensive")]
         [SerializeField] private float defensiveThreshold = 5f;
+
+        /// <summary>
+        /// The base posture setting (ignoring threat-based modifiers).
+        /// Use this for decisions about whether unit CAN be aggressive.
+        /// </summary>
+        public Posture BasePosture => posture;
 
         // Components
         private UnitMovement movement;
@@ -52,7 +58,7 @@ namespace Starbelter.AI
         public Character Character => character;
         public UnitMovement Movement => movement;
         public UnitHealth Health => unitHealth;
-        public ThreatManager ThreatManager => threatManager;
+        public PerceptionManager PerceptionManager => perceptionManager;
         public GameObject ProjectilePrefab => projectilePrefab;
         public Transform FirePoint => firePoint;
         public float WeaponRange => weaponRange;
@@ -97,9 +103,9 @@ namespace Starbelter.AI
         /// </summary>
         public float GetEffectiveThreat()
         {
-            if (threatManager == null) return 0f;
+            if (perceptionManager == null) return 0f;
 
-            float baseThreat = threatManager.GetTotalThreat();
+            float baseThreat = perceptionManager.GetTotalThreat();
             float healthPercent = unitHealth != null ? unitHealth.HealthPercent : 1f;
             float healthMultiplier = 1f + (1f - healthPercent);
 
@@ -144,9 +150,9 @@ namespace Starbelter.AI
                 if (coverQuery == null) return false;
 
                 // Try threat direction first
-                if (threatManager != null)
+                if (perceptionManager != null)
                 {
-                    var threatDir = threatManager.GetHighestThreatDirection();
+                    var threatDir = perceptionManager.GetHighestThreatDirection();
                     if (threatDir.HasValue)
                     {
                         Vector3 threatWorldPos = transform.position + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
@@ -183,16 +189,17 @@ namespace Starbelter.AI
             movement = GetComponent<UnitMovement>();
             unitHealth = GetComponentInChildren<UnitHealth>();
 
-            // Auto-find ThreatManager in children if not assigned
-            if (threatManager == null)
+            // Auto-find PerceptionManager in children if not assigned
+            if (perceptionManager == null)
             {
-                threatManager = GetComponentInChildren<ThreatManager>();
+                perceptionManager = GetComponentInChildren<PerceptionManager>();
             }
 
-            // Sync team to ThreatManager
-            if (threatManager != null)
+            // Sync team and character to PerceptionManager
+            if (perceptionManager != null)
             {
-                threatManager.MyTeam = team;
+                perceptionManager.MyTeam = team;
+                perceptionManager.SetCharacter(character);
             }
 
             // Initialize default character if none assigned
@@ -211,6 +218,7 @@ namespace Starbelter.AI
             if (unitHealth != null)
             {
                 unitHealth.OnDamageTaken += OnDamageTaken;
+                unitHealth.OnDodge += OnDodge;
                 unitHealth.OnFlanked += OnFlanked;
                 unitHealth.OnDeath += OnDeath;
             }
@@ -224,6 +232,7 @@ namespace Starbelter.AI
             if (unitHealth != null)
             {
                 unitHealth.OnDamageTaken -= OnDamageTaken;
+                unitHealth.OnDodge -= OnDodge;
                 unitHealth.OnFlanked -= OnFlanked;
                 unitHealth.OnDeath -= OnDeath;
             }
@@ -248,6 +257,28 @@ namespace Starbelter.AI
             // Notify combat state to interrupt shooting
             var combatState = stateMachine.CurrentState as CombatState;
             combatState?.OnDamageTaken();
+
+            // If in CombatState and in cover phase, consider seeking better cover
+            // Getting hit while in cover means our cover might not be good enough
+            if (combatState != null && combatState.CurrentPhase == CombatState.CombatPhase.InCover)
+            {
+                // High urgency - we got hit! Low threshold to move
+                var seekCoverState = new SeekCoverState(CoverUrgency.High);
+                stateMachine.ChangeState(seekCoverState);
+            }
+        }
+
+        private void OnDodge()
+        {
+            // If in CombatState and in cover phase, consider seeking better cover
+            // Dodging means we're being shot at - might want better cover
+            var combatState = stateMachine.CurrentState as CombatState;
+            if (combatState != null && combatState.CurrentPhase == CombatState.CombatPhase.InCover)
+            {
+                // Medium urgency - we dodged, but still taking fire. Moderate threshold.
+                var seekCoverState = new SeekCoverState(CoverUrgency.Medium);
+                stateMachine.ChangeState(seekCoverState);
+            }
         }
 
         private void OnFlanked(Vector2 flankDirection)
@@ -278,9 +309,9 @@ namespace Starbelter.AI
         public void SetTeam(Team newTeam)
         {
             team = newTeam;
-            if (threatManager != null)
+            if (perceptionManager != null)
             {
-                threatManager.MyTeam = newTeam;
+                perceptionManager.MyTeam = newTeam;
             }
             UpdateTeamColor();
         }
@@ -367,6 +398,15 @@ namespace Starbelter.AI
             stateMachine.ChangeState(suppressState);
         }
 
+        /// <summary>
+        /// Set the unit's combat posture.
+        /// Called by SquadController to synchronize squad posture.
+        /// </summary>
+        public void SetPosture(Posture newPosture)
+        {
+            posture = newPosture;
+        }
+
 #if UNITY_EDITOR
         private void OnDrawGizmosSelected()
         {
@@ -379,10 +419,10 @@ namespace Starbelter.AI
                 );
             }
 
-            // Draw threat directions from ThreatManager
-            if (threatManager != null)
+            // Draw threat directions from PerceptionManager
+            if (perceptionManager != null)
             {
-                var threats = threatManager.GetActiveThreats(0.5f);
+                var threats = perceptionManager.GetActiveThreats(0.5f);
                 foreach (var threat in threats)
                 {
                     // Red line toward highest threat direction

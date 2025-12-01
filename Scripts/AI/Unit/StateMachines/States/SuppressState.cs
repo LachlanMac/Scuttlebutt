@@ -73,8 +73,21 @@ namespace Starbelter.AI
         public override void Update()
         {
             // Check if target is still valid
-            if (suppressTarget == null || !suppressTarget.activeInHierarchy || IsSuppressTargetDead())
+            if (suppressTarget == null)
             {
+                Debug.Log($"[{controller.name}] SuppressState: Target is null, exiting");
+                ChangeState<CombatState>();
+                return;
+            }
+            if (!suppressTarget.activeInHierarchy)
+            {
+                Debug.Log($"[{controller.name}] SuppressState: Target inactive, exiting");
+                ChangeState<CombatState>();
+                return;
+            }
+            if (IsSuppressTargetDead())
+            {
+                Debug.Log($"[{controller.name}] SuppressState: Target is dead, exiting");
                 ChangeState<CombatState>();
                 return;
             }
@@ -109,7 +122,7 @@ namespace Starbelter.AI
                 if (suppressDuration > 0.5f)
                 {
                     Debug.Log($"[{controller.name}] SuppressState: Target exposed from full cover, switching to combat");
-                    var combatState = new CombatState(suppressTarget);
+                    var combatState = new CombatState(suppressTarget, immediate: false);
                     stateMachine.ChangeState(combatState);
                     return;
                 }
@@ -125,7 +138,7 @@ namespace Starbelter.AI
             }
 
             // Stop suppressing if taking too much fire
-            if (ThreatManager != null && ThreatManager.GetTotalThreat() > CombatUtils.SUPPRESSION_ABORT_THREAT)
+            if (PerceptionManager != null && PerceptionManager.GetTotalThreat() > CombatUtils.SUPPRESSION_ABORT_THREAT)
             {
                 ChangeState<SeekCoverState>();
                 return;
@@ -139,20 +152,9 @@ namespace Starbelter.AI
                 return;
             }
 
-            // Periodically check for exposed targets
-            targetCheckTimer -= Time.deltaTime;
-            if (targetCheckTimer <= 0f)
-            {
-                targetCheckTimer = TARGET_CHECK_INTERVAL;
-
-                var exposedTarget = FindExposedTarget();
-                if (exposedTarget != null)
-                {
-                    var combatState = new CombatState(exposedTarget);
-                    stateMachine.ChangeState(combatState);
-                    return;
-                }
-            }
+            // Don't check for other exposed targets during suppression
+            // The whole point is to stay focused on keeping the target pinned
+            // We only exit if: target dies, target exposes from full cover, we take too much fire, or max time reached
 
             // Fire suppressive shots
             fireTimer -= Time.deltaTime;
@@ -242,7 +244,14 @@ namespace Starbelter.AI
                 ProjectilePrefab = controller.ProjectilePrefab
             };
 
-            CombatUtils.ShootProjectile(shootParams);
+            var projectile = CombatUtils.ShootProjectile(shootParams);
+
+            // DEBUG: Purple projectile for suppression shots
+            if (projectile != null)
+            {
+                var sr = projectile.GetComponent<SpriteRenderer>();
+                if (sr != null) sr.color = new Color(0.7f, 0.2f, 1f); // Purple
+            }
         }
 
         private GameObject FindExposedTarget()

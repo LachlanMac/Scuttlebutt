@@ -133,9 +133,9 @@ namespace Starbelter.Combat
             float weaponRange,
             Team myTeam,
             Transform excludeTransform,
-            ThreatManager threatManager)
+            PerceptionManager perceptionManager)
         {
-            if (threatManager == null || myTeam == Team.Neutral) return;
+            if (perceptionManager == null || myTeam == Team.Neutral) return;
 
             ITargetable[] allTargets = Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None)
                 .OfType<ITargetable>()
@@ -151,7 +151,7 @@ namespace Starbelter.Combat
                 float distance = Vector2.Distance(unitPos, target.Transform.position);
                 if (distance <= weaponRange)
                 {
-                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                    perceptionManager.RegisterVisibleEnemy(target.Transform.position, 1f);
                 }
             }
         }
@@ -182,14 +182,14 @@ namespace Starbelter.Combat
         /// <param name="weaponRange">Maximum weapon range</param>
         /// <param name="myTeam">Attacker's team</param>
         /// <param name="excludeTransform">Transform to exclude (usually self)</param>
-        /// <param name="threatManager">Optional threat manager to register visible enemies</param>
+        /// <param name="perceptionManager">Optional perception manager to register visible enemies</param>
         /// <returns>Best target GameObject, or null if none found</returns>
         public static GameObject FindBestTarget(
             Vector2 attackerPos,
             float weaponRange,
             Team myTeam,
             Transform excludeTransform = null,
-            ThreatManager threatManager = null)
+            PerceptionManager perceptionManager = null)
         {
             if (myTeam == Team.Neutral) return null;
 
@@ -210,9 +210,9 @@ namespace Starbelter.Combat
                 float distance = Vector2.Distance(attackerPos, target.Transform.position);
 
                 // Register visible enemies within weapon range as threats
-                if (distance <= weaponRange && threatManager != null)
+                if (distance <= weaponRange && perceptionManager != null)
                 {
-                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                    perceptionManager.RegisterVisibleEnemy(target.Transform.position, 1f);
                 }
 
                 float priority = CalculateTargetPriority(attackerPos, target.Transform.position, weaponRange);
@@ -235,7 +235,7 @@ namespace Starbelter.Combat
             float weaponRange,
             Team myTeam,
             Transform excludeTransform = null,
-            ThreatManager threatManager = null)
+            PerceptionManager perceptionManager = null)
         {
             if (myTeam == Team.Neutral) return (null, 0f);
 
@@ -255,9 +255,9 @@ namespace Starbelter.Combat
 
                 float distance = Vector2.Distance(attackerPos, target.Transform.position);
 
-                if (distance <= weaponRange && threatManager != null)
+                if (distance <= weaponRange && perceptionManager != null)
                 {
-                    threatManager.RegisterVisibleEnemy(target.Transform.position, 1f);
+                    perceptionManager.RegisterVisibleEnemy(target.Transform.position, 1f);
                 }
 
                 float priority = CalculateTargetPriority(attackerPos, target.Transform.position, weaponRange);
@@ -699,21 +699,21 @@ namespace Starbelter.Combat
         /// <summary>
         /// Determine if it's safe to attempt a flank based on threat levels.
         /// </summary>
-        /// <param name="threatManager">Unit's threat manager</param>
+        /// <param name="perceptionManager">Unit's perception manager</param>
         /// <param name="bravery">Unit's bravery stat (1-20)</param>
         /// <returns>True if flanking is advisable</returns>
-        public static bool ShouldAttemptFlank(ThreatManager threatManager, int bravery = 10)
+        public static bool ShouldAttemptFlank(PerceptionManager perceptionManager, int bravery = 10)
         {
-            if (threatManager == null) return true; // No threat info, go for it
+            if (perceptionManager == null) return true; // No threat info, go for it
 
             // Get active threats
-            var threats = threatManager.GetActiveThreats(0.5f);
+            var threats = perceptionManager.GetActiveThreats(0.5f);
 
             // Multiple active threat directions = too dangerous
             if (threats.Count > 1) return false;
 
             // High total threat = too dangerous (unless very brave)
-            float totalThreat = threatManager.GetTotalThreat();
+            float totalThreat = perceptionManager.GetTotalThreat();
             float braveryThreshold = CalculateThreatThreshold(
                 FLANK_ATTEMPT_THREAT_BASE, FLANK_ATTEMPT_BRAVERY_MULT, bravery);
 

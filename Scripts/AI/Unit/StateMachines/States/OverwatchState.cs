@@ -86,6 +86,9 @@ namespace Starbelter.AI
                 return;
             }
 
+            // Face toward watch target (for vision cone)
+            Movement.FaceToward(watchTarget.transform.position);
+
             // Check if watch target is now exposed (peeking or moved out of cover)
             var los = CombatUtils.CheckLineOfSight(
                 controller.transform.position,
@@ -115,7 +118,7 @@ namespace Starbelter.AI
             }
 
             // React to incoming fire - might need to reposition
-            if (ThreatManager != null && ThreatManager.IsUnderFire())
+            if (PerceptionManager != null && PerceptionManager.IsUnderFire())
             {
                 if (!controller.IsInCover)
                 {
@@ -175,22 +178,22 @@ namespace Starbelter.AI
         {
             // Do a quick threat sweep before picking a position
             // This ensures we account for enemy positions even if we haven't been shot at recently
-            if (ThreatManager != null)
+            if (PerceptionManager != null)
             {
                 CombatUtils.ScanAndRegisterThreats(
                     controller.transform.position,
                     controller.WeaponRange,
                     controller.Team,
                     controller.transform,
-                    ThreatManager
+                    PerceptionManager
                 );
             }
 
             // Get threat direction (now updated with enemy positions)
             Vector2 threatDir = Vector2.up; // Default
-            if (ThreatManager != null)
+            if (PerceptionManager != null)
             {
-                var dir = ThreatManager.GetHighestThreatDirection();
+                var dir = PerceptionManager.GetHighestThreatDirection();
                 if (dir.HasValue)
                 {
                     threatDir = dir.Value;
@@ -214,7 +217,8 @@ namespace Starbelter.AI
 
             if (fightingResult.Found)
             {
-                Debug.Log($"[{controller.name}] Found fighting position with target in {fightingResult.TargetCoverType} cover");
+                string targetName = fightingResult.BestTarget != null ? fightingResult.BestTarget.name : "Unknown";
+                Debug.Log($"[{controller.name}] Found fighting position at {fightingResult.Position} - target {targetName} is in {fightingResult.TargetCoverType} cover, my cover: {fightingResult.OurCoverType}");
 
                 // Move to the fighting position
                 if (Movement.MoveTo(fightingResult.Position))
