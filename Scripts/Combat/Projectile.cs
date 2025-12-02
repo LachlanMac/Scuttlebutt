@@ -36,6 +36,9 @@ namespace Starbelter.Combat
         private GameObject sourceUnit;
         private bool isAimedShot;
 
+        // Tile threat tracking
+        private Vector3 lastPosition;
+
         public float Damage => damage;
         public DamageType DamageType => damageType;
         public Team SourceTeam => sourceTeam;
@@ -49,6 +52,7 @@ namespace Starbelter.Combat
             rb = GetComponent<Rigidbody2D>();
             // Set origin immediately in case collision happens before Fire() is called
             origin = transform.position;
+            lastPosition = transform.position;
         }
 
         private void Start()
@@ -71,6 +75,20 @@ namespace Starbelter.Combat
             }
         }
 
+        private void Update()
+        {
+            // Report tile crossings to threat map
+            if (TileThreatMap.Instance != null)
+            {
+                Vector3 currentPosition = transform.position;
+                if (currentPosition != lastPosition)
+                {
+                    TileThreatMap.Instance.AddThreatAlongPath(lastPosition, currentPosition, damage, sourceTeam);
+                    lastPosition = currentPosition;
+                }
+            }
+        }
+
         /// <summary>
         /// Initialize and fire the projectile.
         /// </summary>
@@ -83,6 +101,7 @@ namespace Starbelter.Combat
             sourceTeam = team;
             sourceUnit = source;
             origin = transform.position;
+            lastPosition = transform.position; // Reset for threat tracking
             rb.linearVelocity = direction * speed;
 
             // Rotate so sprite's "up" faces the fire direction

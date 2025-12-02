@@ -18,7 +18,7 @@ namespace Starbelter.AI
         public bool IsDead => unitHealth != null && unitHealth.IsDead;
 
         [Header("Team")]
-        [SerializeField] private Team team = Team.Ally;
+        [SerializeField] private Team team = Team.Federation;
 
         [Header("Character")]
         [SerializeField] private Character character;
@@ -140,7 +140,8 @@ namespace Starbelter.AI
         public Vector3 FirePosition => firePoint != null ? firePoint.position : transform.position;
 
         /// <summary>
-        /// Is the unit currently in cover from the highest threat direction?
+        /// Is the unit currently in cover from threats?
+        /// Checks against highest threat direction first, then falls back to any known enemies.
         /// </summary>
         public bool IsInCover
         {
@@ -149,7 +150,7 @@ namespace Starbelter.AI
                 var coverQuery = CoverQuery.Instance;
                 if (coverQuery == null) return false;
 
-                // Try threat direction first
+                // Try threat direction first (most accurate - based on incoming fire)
                 if (perceptionManager != null)
                 {
                     var threatDir = perceptionManager.GetHighestThreatDirection();
@@ -159,9 +160,22 @@ namespace Starbelter.AI
                         var coverCheck = coverQuery.CheckCoverAt(transform.position, threatWorldPos);
                         return coverCheck.HasCover;
                     }
+
+                    // No active threat direction - check against known enemies instead
+                    // This allows suppression candidates to be found even if not actively being shot at
+                    var knownEnemies = perceptionManager.GetPerceivedEnemies();
+                    foreach (var enemy in knownEnemies)
+                    {
+                        if (enemy.Unit == null) continue;
+                        var coverCheck = coverQuery.CheckCoverAt(transform.position, enemy.Unit.transform.position);
+                        if (coverCheck.HasCover)
+                        {
+                            return true; // In cover from at least one known enemy
+                        }
+                    }
                 }
 
-                // No active threat direction - not in cover (need to find cover based on enemies)
+                // No enemies known or no cover found
                 return false;
             }
         }
@@ -354,8 +368,8 @@ namespace Starbelter.AI
 
             spriteRenderer.color = team switch
             {
-                Team.Ally => new Color(0.5f, 0.7f, 1f),    // Light blue
-                Team.Enemy => new Color(1f, 0.5f, 0.5f),  // Light red
+                Team.Federation => new Color(0.5f, 0.7f, 1f),  // Light blue - Federation
+                Team.Empire => new Color(1f, 0.5f, 0.5f),      // Light red - Empire
                 Team.Neutral => Color.white,
                 _ => Color.white
             };
@@ -363,10 +377,19 @@ namespace Starbelter.AI
 
         /// <summary>
         /// Assign a character to this unit (call before or during spawn).
+        /// Also renames the GameObject to match the character.
         /// </summary>
         public void SetCharacter(Character newCharacter)
         {
             character = newCharacter;
+
+            // Rename GameObject to match character
+            if (character != null)
+            {
+                string teamPrefix = team == Team.Federation ? "FED" : (team == Team.Empire ? "IMP" : "NEUTRAL");
+                string leaderSuffix = isSquadLeader ? "_LEADER" : "";
+                gameObject.name = $"{teamPrefix}_{character.RankAndName}{leaderSuffix}";
+            }
         }
 
         /// <summary>

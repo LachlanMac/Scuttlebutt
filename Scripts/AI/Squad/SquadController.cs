@@ -13,9 +13,19 @@ namespace Starbelter.AI
     public class SquadController : MonoBehaviour
     {
         [Header("Squad Settings")]
-        [SerializeField] private Team team = Team.Ally;
+        [SerializeField] private Team team = Team.Federation;
         [SerializeField] private GameObject unitPrefab;
         [SerializeField] private int unitCount = 4;
+
+        [Header("Roster Settings")]
+        [Tooltip("Number of enlisted members (officers are added automatically)")]
+        [SerializeField] private int enlistedCount = 3;
+        [Tooltip("Maximum officers to include (1-2, randomly chosen)")]
+        [SerializeField] private int maxOfficers = 2;
+        [Tooltip("Seed for reproducible squad composition (-1 for random)")]
+        [SerializeField] private int rosterSeed = -1;
+        [Tooltip("Use roster data to populate squad characters")]
+        [SerializeField] private bool useRoster = true;
 
         [Header("Spawn Position")]
         [SerializeField] private Transform spawnPoint;
@@ -121,7 +131,7 @@ namespace Starbelter.AI
         private void Start()
         {
             // Delay enemy squad spawn to let allies get into position first
-            if (team == Team.Enemy)
+            if (team == Team.Empire)
             {
                 StartCoroutine(DelayedSpawn(5f));
             }
@@ -384,6 +394,18 @@ namespace Starbelter.AI
                 return;
             }
 
+            // Build squad roster from data if enabled
+            List<Character> squadRoster = null;
+            if (useRoster)
+            {
+                squadRoster = team == Team.Federation
+                    ? DataLoader.BuildAllySquad(enlistedCount, maxOfficers, rosterSeed)
+                    : DataLoader.BuildEnemySquad(enlistedCount, maxOfficers, rosterSeed);
+
+                // Update unit count to match roster size
+                unitCount = squadRoster.Count;
+            }
+
             // Use spawn point position, or this object's position as fallback
             Vector3 center = spawnPoint != null ? spawnPoint.position : transform.position;
 
@@ -392,7 +414,8 @@ namespace Starbelter.AI
 
             for (int i = 0; i < unitCount && i < spawnPositions.Count; i++)
             {
-                SpawnUnit(spawnPositions[i], i);
+                Character character = squadRoster != null && i < squadRoster.Count ? squadRoster[i] : null;
+                SpawnUnit(spawnPositions[i], i, character);
             }
 
             // Set squad posture on all units
@@ -415,7 +438,7 @@ namespace Starbelter.AI
             Debug.Log($"[{gameObject.name}] Squad posture set to {newPosture}");
         }
 
-        private void SpawnUnit(Vector3 position, int index)
+        private void SpawnUnit(Vector3 position, int index, Character character = null)
         {
             GameObject unitObj = Instantiate(unitPrefab, position, Quaternion.identity);
             unitObj.transform.SetParent(transform);
@@ -423,16 +446,31 @@ namespace Starbelter.AI
             // First unit is the leader
             bool isLeader = index == 0;
 
-            // Name the unit based on team and index
-            string teamPrefix = team == Team.Ally ? "ALLY" : "ENEMY";
+            // Name the unit based on character or team/index
+            string teamPrefix = team == Team.Federation ? "FED" : "IMP";
             string leaderSuffix = isLeader ? "_LEADER" : "";
-            unitObj.name = $"{teamPrefix}_UNIT_{index + 1}{leaderSuffix}";
+            if (character != null)
+            {
+                unitObj.name = $"{teamPrefix}_{character.RankAndName}{leaderSuffix}";
+            }
+            else
+            {
+                unitObj.name = $"{teamPrefix}_UNIT_{index + 1}{leaderSuffix}";
+            }
 
             var unitController = unitObj.GetComponent<UnitController>();
             if (unitController != null)
             {
+                // Set team and squad FIRST so SetCharacter names correctly
                 unitController.SetTeam(team);
                 unitController.SetSquad(this, isLeader);
+
+                // Assign character data if provided
+                if (character != null)
+                {
+                    character.InitializeHealth();
+                    unitController.SetCharacter(character);
+                }
                 members.Add(unitController);
 
                 // Subscribe to perception events for squad intel sharing
@@ -444,6 +482,12 @@ namespace Starbelter.AI
                 if (isLeader)
                 {
                     leader = unitController;
+                }
+
+                // Log spawned unit info
+                if (character != null)
+                {
+                    Debug.Log($"[{gameObject.name}] Spawned {character.RankAndName} \"{character.Callsign}\" ({character.Specialization}) with {character.MainWeapon?.Name ?? "no weapon"}");
                 }
             }
         }
@@ -613,8 +657,10 @@ namespace Starbelter.AI
                 }
 
                 // Check personal threat level (don't pull someone under heavy fire)
+                // Threshold of 40 allows suppression during normal combat (threat ~20-30)
+                // but avoids assigning units that are being actively focused
                 float personalThreat = member.PerceptionManager != null ? member.PerceptionManager.GetTotalThreat() : 0f;
-                if (personalThreat > 20f)
+                if (personalThreat > 40f)
                 {
                     Debug.Log($"[{gameObject.name}] SuppressCandidate {member.name}: SKIP - threat too high ({personalThreat:F1})");
                     continue;
@@ -769,7 +815,7 @@ namespace Starbelter.AI
             // Show spawn positions in editor
             var positions = GetGridPositions(center, unitCount);
 
-            Gizmos.color = team == Team.Ally ? Color.blue : Color.red;
+            Gizmos.color = team == Team.Federation ? Color.blue : Color.red;
 
             foreach (var pos in positions)
             {

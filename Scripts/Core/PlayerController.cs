@@ -13,7 +13,7 @@ namespace Starbelter.Core
 
         [Header("Shooting")]
         [SerializeField] private GameObject projectilePrefab;
-        [SerializeField] private Team team = Team.Enemy;
+        [SerializeField] private Team team = Team.Empire;
         [SerializeField] private float fireRate = 0.2f;
 
         private Camera mainCamera;

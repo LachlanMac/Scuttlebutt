@@ -27,7 +27,7 @@ namespace Starbelter.Combat
         [SerializeField] private float memoryDuration = 3f;
 
         [Tooltip("This unit's team")]
-        [SerializeField] private Team myTeam = Team.Ally;
+        [SerializeField] private Team myTeam = Team.Federation;
 
         [Header("Threat Settings")]
         [Tooltip("Time in seconds for threat to decay from max to zero")]
