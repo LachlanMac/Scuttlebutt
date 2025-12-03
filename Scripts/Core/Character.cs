@@ -269,6 +269,12 @@ namespace Starbelter.Core
             if (!string.IsNullOrEmpty(MainWeaponId))
             {
                 MainWeapon = DataLoader.GetWeapon(MainWeaponId);
+
+                // Ensure weapon starts with full magazine
+                if (MainWeapon != null)
+                {
+                    MainWeapon.Reload();
+                }
             }
         }
 

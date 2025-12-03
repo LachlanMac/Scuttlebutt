@@ -10,6 +10,9 @@ namespace Starbelter.Core
     {
         Team Team { get; }
         Transform Transform { get; }
+        Vector3 Position { get; }
         bool IsDead { get; }
+        float WeaponRange { get; }
+        bool IsDucked { get; }
     }
 }

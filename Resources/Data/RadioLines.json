@@ -1,0 +1,144 @@
+{
+  "radioLines": [
+    {
+      "event": "FIRST_CONTACT",
+      "variants": [
+        "Contact!",
+        "Eyes on hostiles!",
+        "Enemy spotted!",
+        "We got company!",
+        "Tangos, dead ahead!"
+      ]
+    },
+    {
+      "event": "TAKING_FIRE",
+      "variants": [
+        "Taking fire!",
+        "Shots incoming!",
+        "They're shooting at us!",
+        "Under fire!",
+        "We're being engaged!"
+      ]
+    },
+    {
+      "event": "ENEMY_DOWN",
+      "variants": [
+        "Tango down!",
+        "Got one!",
+        "He's down!",
+        "Target eliminated!",
+        "Scratch one!"
+      ]
+    },
+    {
+      "event": "RELOADING",
+      "variants": [
+        "Reloading!",
+        "Mag out!",
+        "Changing mag!",
+        "Cover me, reloading!",
+        "Need a sec!"
+      ]
+    },
+    {
+      "event": "SUPPRESSED",
+      "variants": [
+        "Pinned down!",
+        "Can't move!",
+        "Heavy fire!",
+        "I'm stuck here!",
+        "Too hot to move!"
+      ]
+    },
+    {
+      "event": "MOVING_TO_COVER",
+      "variants": [
+        "Moving to cover!",
+        "Relocating!",
+        "Changing position!",
+        "Finding cover!",
+        "Moving up!"
+      ]
+    },
+    {
+      "event": "IN_POSITION",
+      "variants": [
+        "In position!",
+        "Set!",
+        "Good to go!",
+        "Ready here!",
+        "Holding position!"
+      ]
+    },
+    {
+      "event": "ALLY_DOWN",
+      "variants": [
+        "Man down!",
+        "We lost one!",
+        "Friendly down!",
+        "They got one of ours!",
+        "Medic!"
+      ]
+    },
+    {
+      "event": "LOW_AMMO",
+      "variants": [
+        "Running low!",
+        "Almost out!",
+        "Low on ammo!",
+        "Need resupply!",
+        "Last mag!"
+      ]
+    },
+    {
+      "event": "FLANKING",
+      "variants": [
+        "Going around!",
+        "Flanking left!",
+        "Taking the side!",
+        "Moving to flank!",
+        "Circling around!"
+      ]
+    },
+    {
+      "event": "ENGAGING",
+      "variants": [
+        "Engaging!",
+        "Opening fire!",
+        "Firing!",
+        "Lighting them up!",
+        "Weapons free!"
+      ]
+    },
+    {
+      "event": "SUPPRESSING",
+      "variants": [
+        "Suppressing!",
+        "Keeping heads down!",
+        "Laying down fire!",
+        "Cover fire!",
+        "Suppressive fire!"
+      ]
+    },
+    {
+      "event": "RECOVERING",
+      "variants": [
+        "I'm up!",
+        "Back in the fight!",
+        "Good to go!",
+        "Recovered!",
+        "On my feet!"
+      ]
+    },
+    {
+      "event": "SQUAD_CLEAR",
+      "variants": [
+        "Area clear!",
+        "All tangos down!",
+        "Sector clear!",
+        "That's all of them!",
+        "No more contacts!"
+      ]
+    }
+  ]
+}

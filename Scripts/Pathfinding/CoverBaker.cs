@@ -31,17 +31,13 @@ namespace Starbelter.Pathfinding
         // Stores cover data: key = tile position, value = list of cover sources at that position
         private Dictionary<Vector3Int, List<CoverSource>> coverData = new Dictionary<Vector3Int, List<CoverSource>>();
 
-        // 8-directional offsets for adjacent tiles (including diagonals)
+        // 4-directional offsets for adjacent tiles (cardinal directions only, no diagonals)
         private static readonly Vector3Int[] AdjacentOffsets = new Vector3Int[]
         {
             new Vector3Int(1, 0, 0),   // Right
             new Vector3Int(-1, 0, 0),  // Left
             new Vector3Int(0, 1, 0),   // Up
-            new Vector3Int(0, -1, 0),  // Down
-            new Vector3Int(1, 1, 0),   // Up-Right
-            new Vector3Int(-1, 1, 0),  // Up-Left
-            new Vector3Int(1, -1, 0),  // Down-Right
-            new Vector3Int(-1, -1, 0)  // Down-Left
+            new Vector3Int(0, -1, 0)   // Down
         };
 
         private void Awake()

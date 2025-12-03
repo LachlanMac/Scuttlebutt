@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Starbelter.Core;
 using Starbelter.Combat;
+using Starbelter.AI;
 
 namespace Starbelter.Pathfinding
 {
@@ -454,6 +455,36 @@ namespace Starbelter.Pathfinding
                 }
             }
 
+            // === DEFENSIVE COVER SCORING (protection FROM enemies) ===
+            var (enemyCoverScore, enemyCoverBreakdown, enemiesInRange) = CalculateEnemyCoverScore(cover.WorldPosition, searchParams);
+
+            if (searchParams.Mode == CoverMode.Fighting)
+            {
+                // Fighting mode: REQUIRE at least one enemy in range
+                if (enemiesInRange == 0)
+                {
+                    return (-100f, $"REJECTED: Fighting mode - no enemies in range. {sb}");
+                }
+
+                score += enemyCoverScore;
+                if (!string.IsNullOrEmpty(enemyCoverBreakdown))
+                {
+                    sb.Append($", {enemyCoverBreakdown}");
+                }
+            }
+            else // Defensive/Retreat mode
+            {
+                // Defensive mode: enemy cover is still valuable but not required
+                if (enemiesInRange > 0 && enemyCoverScore > 0)
+                {
+                    score += enemyCoverScore;
+                    if (!string.IsNullOrEmpty(enemyCoverBreakdown))
+                    {
+                        sb.Append($", {enemyCoverBreakdown}");
+                    }
+                }
+            }
+
             return (score, sb.ToString());
         }
 
@@ -528,6 +559,97 @@ namespace Starbelter.Pathfinding
             }
 
             return (totalScore, breakdown.ToString(), hasAnyLOS);
+        }
+
+        /// <summary>
+        /// Calculate defensive cover score based on protection FROM enemies.
+        /// Checks if enemies can shoot the unit at this cover position.
+        /// Returns (score, breakdown, enemiesInRange). Score of -1 means no enemies in range (reject in Fighting mode).
+        /// </summary>
+        private (float score, string breakdown, int enemiesInRange) CalculateEnemyCoverScore(Vector3 coverPosition, CoverSearchParams searchParams)
+        {
+            if (searchParams.KnownEnemies == null || searchParams.KnownEnemies.Count == 0)
+            {
+                // No enemies provided - can't evaluate defensive cover
+                return (-1f, "no_enemies", 0);
+            }
+
+            int enemiesInRange = 0;
+            int enemiesCovered = 0;
+            float totalScore = 0f;
+            var breakdown = new System.Text.StringBuilder();
+
+            foreach (var enemy in searchParams.KnownEnemies)
+            {
+                if (enemy == null) continue;
+
+                var targetable = enemy.GetComponent<ITargetable>();
+                if (targetable == null || targetable.IsDead) continue;
+
+                // Get enemy's weapon range
+                var enemyController = enemy.GetComponent<UnitController>();
+                float enemyWeaponRange = enemyController != null ? enemyController.WeaponRange : 15f;
+
+                // Apply tactics-based estimation uncertainty
+                // Guestimate = 5 - (Tactics / 5), minimum 0
+                // Higher tactics = more accurate range estimation
+                int guestimate = Mathf.Max(0, 5 - (searchParams.Tactics / 5));
+                float estimatedRange = enemyWeaponRange;
+                if (guestimate > 0)
+                {
+                    estimatedRange = enemyWeaponRange + Random.Range(-guestimate, guestimate + 1);
+                }
+
+                // Check if enemy is within estimated range of cover position
+                Vector3 enemyPos = enemy.transform.position;
+                float distToEnemy = Vector3.Distance(coverPosition, enemyPos);
+                if (distToEnemy > estimatedRange)
+                {
+                    // Enemy out of range, skip
+                    continue;
+                }
+
+                enemiesInRange++;
+
+                // Raycast FROM enemy TO cover position to check if cover protects us
+                // CheckLineOfSight already handles half cover adjacency (only counts if near target)
+                var losResult = CombatUtils.CheckLineOfSight(enemyPos, coverPosition);
+
+                if (losResult.IsBlocked || losResult.IsPartialCover)
+                {
+                    // We have cover from this enemy!
+                    enemiesCovered++;
+
+                    // Full cover = +8, Half cover = +5
+                    if (losResult.CoverType == CoverType.Full)
+                    {
+                        totalScore += 8f;
+                    }
+                    else if (losResult.CoverType == CoverType.Half)
+                    {
+                        totalScore += 5f;
+                    }
+                }
+            }
+
+            // No enemies in range - return -1 to signal rejection in Fighting mode
+            if (enemiesInRange == 0)
+            {
+                return (-1f, "no_enemies_in_range", 0);
+            }
+
+            // Bonus: if ALL enemies in range are covered, multiply by 2
+            if (enemiesCovered == enemiesInRange)
+            {
+                totalScore *= 2f;
+                breakdown.Append($"cover={enemiesCovered}/{enemiesInRange}(ALL)x2");
+            }
+            else
+            {
+                breakdown.Append($"cover={enemiesCovered}/{enemiesInRange}");
+            }
+
+            return (totalScore, breakdown.ToString(), enemiesInRange);
         }
 
         /// <summary>
@@ -773,9 +895,8 @@ namespace Starbelter.Pathfinding
 
                 float distance = Vector2.Distance(centerPosition, (Vector2)worldPos);
                 if (distance > maxDistance) continue;
-                if (distance < 0.5f) continue; // Skip positions too close
 
-                // Skip occupied or reserved tiles
+                // Skip occupied or reserved tiles (but not our own position)
                 if (tileOccupancy != null && !tileOccupancy.IsTileAvailable(tilePos, excludeUnit))
                 {
                     continue;
@@ -983,6 +1104,7 @@ namespace Starbelter.Pathfinding
         public bool IsLeader;           // True if this unit is the squad leader
         public CoverMode Mode;          // Fighting (requires LOS) or Defensive (allows retreat)
         public List<GameObject> KnownEnemies; // Enemies to check LOS against
+        public int Tactics;             // Unit's Tactics stat (1-20) for estimating enemy ranges
 
         /// <summary>
         /// Create default parameters (neutral, fighting mode).
@@ -998,14 +1120,15 @@ namespace Starbelter.Pathfinding
             RallyPoint = null,
             IsLeader = false,
             Mode = CoverMode.Fighting,
-            KnownEnemies = null
+            KnownEnemies = null,
+            Tactics = 10
         };
 
         /// <summary>
         /// Create from posture and optional bravery (for Neutral posture).
         /// Defaults to Fighting mode - use WithMode() to change.
         /// </summary>
-        public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, Team team = Team.Neutral, Vector3? leaderPos = null, Vector3? rallyPoint = null, bool isLeader = false)
+        public static CoverSearchParams FromPosture(float weaponRange, Posture posture, int bravery = 10, int tactics = 10, Team team = Team.Neutral, Vector3? leaderPos = null, Vector3? rallyPoint = null, bool isLeader = false)
         {
             float aggression = posture switch
             {
@@ -1026,7 +1149,8 @@ namespace Starbelter.Pathfinding
                 RallyPoint = rallyPoint,
                 IsLeader = isLeader,
                 Mode = CoverMode.Fighting,
-                KnownEnemies = null
+                KnownEnemies = null,
+                Tactics = tactics
             };
         }
 

@@ -1,6 +1,7 @@
 using UnityEngine;
 using Pathfinding;
 using Starbelter.Pathfinding;
+using Starbelter.Core;
 
 namespace Starbelter.AI
 {
@@ -161,6 +162,13 @@ namespace Starbelter.AI
         /// <returns>True if movement was started, false if blocked or throttled</returns>
         public bool MoveTo(Vector3 worldPosition)
         {
+            // SANITY CHECK: Reject (0,0,0) destinations unless we're actually near origin
+            if (worldPosition.sqrMagnitude < 0.01f && transform.position.sqrMagnitude > 1f)
+            {
+                Debug.LogError($"[{gameObject.name}] MoveTo REJECTING (0,0,0) destination! Current pos={transform.position}");
+                return false;
+            }
+
             if (tileOccupancy != null)
             {
                 var tilePos = tileOccupancy.WorldToTile(worldPosition);
@@ -168,6 +176,7 @@ namespace Starbelter.AI
             }
             else
             {
+                Debug.LogWarning($"[{gameObject.name}] MoveTo: tileOccupancy is null! Setting targetPosition directly to {worldPosition}");
                 targetPosition = worldPosition;
                 return RequestPath(worldPosition);
             }
@@ -206,17 +215,23 @@ namespace Starbelter.AI
         }
 
         /// <summary>
+        /// Request a path to destination.
+        /// TODO: Implement threat-aware routing using newer A* Pathfinding Pro API.
+        /// For now, threat is factored into destination selection (WHERE) not routing (HOW).
+        /// </summary>
+        public bool RequestThreatAwarePath(Vector3 destination, Team myTeam)
+        {
+            // For now, use regular pathfinding via MoveTo which properly sets targetPosition
+            // Threat awareness is handled in destination selection (CombatUtils.FindFightingPosition)
+            return MoveTo(destination);
+        }
+
+        /// <summary>
         /// Stops movement at the nearest tile center (either current tile or next waypoint).
         /// Use this instead of Stop() when interrupting movement to ensure unit ends on a valid tile.
         /// </summary>
         public void StopAtNearestTile()
         {
-            if (!isMoving || currentPath == null)
-            {
-                Stop();
-                return;
-            }
-
             // Find current tile center
             var currentTile = tileOccupancy != null
                 ? tileOccupancy.WorldToTile(transform.position)
@@ -227,11 +242,11 @@ namespace Starbelter.AI
 
             float distToCurrentTile = Vector3.Distance(transform.position, currentTileCenter);
 
-            // Find next waypoint tile center (if we have waypoints remaining)
+            // Find next waypoint tile center (if we have a path with waypoints remaining)
             Vector3 nextTileCenter = currentTileCenter;
             float distToNextTile = float.MaxValue;
 
-            if (currentWaypoint < currentPath.vectorPath.Count)
+            if (currentPath != null && currentWaypoint < currentPath.vectorPath.Count)
             {
                 var nextWaypointPos = currentPath.vectorPath[currentWaypoint];
                 var nextTile = tileOccupancy != null
@@ -261,7 +276,7 @@ namespace Starbelter.AI
 
             float distToClosest = Vector3.Distance(transform.position, closestTileCenter);
 
-            // If very close, just snap
+            // If already at tile center (or very close), just stop
             if (distToClosest <= ARRIVAL_THRESHOLD)
             {
                 transform.position = closestTileCenter;
@@ -269,16 +284,10 @@ namespace Starbelter.AI
                 return;
             }
 
-            // Otherwise, redirect to closest tile center
-            Debug.Log($"[{gameObject.name}] StopAtNearestTile: Redirecting to {closestTile} (dist={distToClosest:F2})");
+            // Otherwise, redirect to closest tile center and continue moving
             targetPosition = closestTileCenter;
             targetTile = closestTile;
-
-            // Clear the path waypoints - just go directly to tile center
             currentPath = null;
-
-            // We'll let FollowPath handle moving to targetPosition
-            // But we need a simple path, so create a minimal one
             isMoving = true;
         }
 
@@ -287,7 +296,7 @@ namespace Starbelter.AI
         /// </summary>
         public void Stop()
         {
-            // Log if we're stopping away from a tile center
+            // Log if we're stopping away from a tile center - this shouldn't happen
             if (tileOccupancy != null)
             {
                 var currentTile = tileOccupancy.WorldToTile(transform.position);
@@ -296,7 +305,6 @@ namespace Starbelter.AI
 
                 if (distFromCenter > ARRIVAL_THRESHOLD)
                 {
-                    // Get caller info for debugging
                     var stackTrace = new System.Diagnostics.StackTrace(1, true);
                     var callerFrame = stackTrace.GetFrame(0);
                     string callerInfo = callerFrame != null
@@ -354,15 +362,6 @@ namespace Starbelter.AI
 
             lastPathRequestTime = Time.time;
             isMoving = true; // Set immediately so states know we're about to move
-
-            // Reset threat buckets when starting movement
-            // Old threat directions are relative to our old position and become stale
-            // We'll build up fresh threat data as we move to the new position
-            if (unitController != null && unitController.PerceptionManager != null)
-            {
-                unitController.PerceptionManager.ResetThreats(0.01f);
-                Debug.Log($"[{gameObject.name}] Movement started - reset threat buckets");
-            }
 
             seeker.StartPath(transform.position, destination, OnPathComplete);
             return true;

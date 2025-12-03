@@ -9,7 +9,7 @@
       "optimalRange": 10,
       "maxRange": 15,
       "magazineSize": 30,
-      "reloadTime": 2.0
+      "reloadTime": 4.0
     },
     {
       "id": "pistol",
@@ -20,7 +20,7 @@
       "optimalRange": 6,
       "maxRange": 10,
       "magazineSize": 12,
-      "reloadTime": 1.5
+      "reloadTime": 3.0
     },
     {
       "id": "sniper_rifle",
@@ -31,7 +31,7 @@
       "optimalRange": 18,
       "maxRange": 25,
       "magazineSize": 5,
-      "reloadTime": 3.0
+      "reloadTime": 6.0
     },
     {
       "id": "laser_rifle",
@@ -42,7 +42,7 @@
       "optimalRange": 12,
       "maxRange": 18,
       "magazineSize": 20,
-      "reloadTime": 2.5
+      "reloadTime": 5.0
     },
     {
       "id": "plasma_cannon",
@@ -53,7 +53,7 @@
       "optimalRange": 8,
       "maxRange": 12,
       "magazineSize": 6,
-      "reloadTime": 4.0
+      "reloadTime": 8.0
     },
     {
       "id": "smg",
@@ -64,7 +64,7 @@
       "optimalRange": 5,
       "maxRange": 8,
       "magazineSize": 40,
-      "reloadTime": 1.8
+      "reloadTime": 3.6
     }
   ]
 }

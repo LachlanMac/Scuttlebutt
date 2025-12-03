@@ -1,35 +1,45 @@
+using UnityEngine;
+
 namespace Starbelter.AI
 {
     /// <summary>
-    /// Base class for all unit states.
+    /// Base class for unit states. Simple and focused.
     /// </summary>
     public abstract class UnitState
     {
         protected UnitController controller;
-        protected UnitStateMachine stateMachine;
+        protected float stateEnterTime;
 
-        // Convenience accessors
+        // Convenience accessors (only use after IsValid check)
         protected UnitMovement Movement => controller.Movement;
-        protected Combat.PerceptionManager PerceptionManager => controller.PerceptionManager;
+        protected Vector3 Position => controller.transform.position;
 
         /// <summary>
-        /// Called by the state machine to inject dependencies.
+        /// Check if controller is still valid (not destroyed).
+        /// Call this at the start of Update before doing anything.
         /// </summary>
-        public void Initialize(UnitController controller, UnitStateMachine stateMachine)
+        protected bool IsValid => controller != null && !controller.IsDead;
+
+        /// <summary>
+        /// Called to inject the controller reference.
+        /// </summary>
+        public void Initialize(UnitController controller)
         {
             this.controller = controller;
-            this.stateMachine = stateMachine;
         }
 
         /// <summary>
         /// Called when entering this state.
         /// </summary>
-        public virtual void Enter() { }
+        public virtual void Enter()
+        {
+            stateEnterTime = Time.time;
+        }
 
         /// <summary>
         /// Called every frame while in this state.
         /// </summary>
-        public virtual void Update() { }
+        public abstract void Update();
 
         /// <summary>
         /// Called when exiting this state.
@@ -37,11 +47,13 @@ namespace Starbelter.AI
         public virtual void Exit() { }
 
         /// <summary>
-        /// Helper to transition to another state.
+        /// Time spent in current state.
         /// </summary>
-        protected void ChangeState<T>() where T : UnitState, new()
-        {
-            stateMachine.ChangeState<T>();
-        }
+        protected float TimeInState => Time.time - stateEnterTime;
+
+        /// <summary>
+        /// Check if minimum state time has passed.
+        /// </summary>
+        protected bool CanTransition => controller != null && controller.CanTransition;
     }
 }

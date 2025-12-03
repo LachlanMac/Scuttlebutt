@@ -1,4 +1,6 @@
 using UnityEngine;
+using System.Collections.Generic;
+using Pathfinding;
 using Starbelter.Core;
 using Starbelter.Combat;
 using Starbelter.Pathfinding;
@@ -6,143 +8,141 @@ using Starbelter.Pathfinding;
 namespace Starbelter.AI
 {
     /// <summary>
-    /// Main AI controller for a unit. Manages the state machine and provides
-    /// access to unit components for states to use.
+    /// The 5 core states a unit can be in.
+    /// </summary>
+    public enum UnitStateType
+    {
+        Ready,      // No threats, holding position, high alertness
+        Combat,     // Engaged with enemy, shooting
+        Moving,     // Relocating to new position
+        Pinned,     // Suppressed, can't act (ducking)
+        Reloading   // Reloading weapon, vulnerable
+    }
+
+    /// <summary>
+    /// Main AI controller for a unit. Simple 5-state tactical brain.
+    /// Uses TileThreatMap for threat-aware decision making.
     /// </summary>
     [RequireComponent(typeof(UnitMovement))]
-    public class UnitController : MonoBehaviour, Core.ITargetable
+    public class UnitController : MonoBehaviour, ITargetable
     {
-        // ITargetable implementation
-        Team Core.ITargetable.Team => team;
-        public Transform Transform => transform;
-        public bool IsDead => unitHealth != null && unitHealth.IsDead;
+        // === CONSTANTS ===
+        private const float THREAT_DANGEROUS = 10f;
+        private const float THREAT_DEADLY = 20f;
+        private const float SUPPRESSION_PIN_THRESHOLD = 80f;
 
+        // Suppression decay rates based on threat level
+        private const float SUPPRESSION_DECAY_HIGH_THREAT = 2f;    // Under heavy fire - slow recovery
+        private const float SUPPRESSION_DECAY_MED_THREAT = 8f;     // Some fire - moderate recovery
+        private const float SUPPRESSION_DECAY_LOW_THREAT = 20f;    // Light/no fire - fast recovery
+        private const float EVALUATION_INTERVAL = 0.5f;
+        private const float MIN_STATE_TIME = 1f;
+        private const float COVER_SEARCH_RADIUS = 15f;
+        private const float ARRIVAL_THRESHOLD = 0.5f;
+
+        // === SERIALIZED FIELDS ===
         [Header("Team")]
         [SerializeField] private Team team = Team.Federation;
 
         [Header("Character")]
         [SerializeField] private Character character;
 
-        [Header("References")]
-        [SerializeField] private PerceptionManager perceptionManager;
-
-        [Header("Weapon")]
+        [Header("Combat")]
         [SerializeField] private GameObject projectilePrefab;
         [SerializeField] private Transform firePoint;
         [SerializeField] private float weaponRange = 15f;
+        [SerializeField] private float fireRate = 1f;
 
         [Header("Tactics")]
         [SerializeField] private Posture posture = Posture.Neutral;
-        [Tooltip("Threat level above which unit becomes defensive")]
-        [SerializeField] private float defensiveThreshold = 5f;
 
-        /// <summary>
-        /// The base posture setting (ignoring threat-based modifiers).
-        /// Use this for decisions about whether unit CAN be aggressive.
-        /// </summary>
-        public Posture BasePosture => posture;
+        [Header("Radio UI")]
+        [SerializeField] private GameObject radioMessageObject;
+        [SerializeField] private TMPro.TextMeshProUGUI radioText;
 
-        // Components
+        // === COMPONENTS ===
         private UnitMovement movement;
         private UnitHealth unitHealth;
-        private UnitStateMachine stateMachine;
+        private PerceptionManager perceptionManager;
 
-        // Squad
+        // === STATE MACHINE ===
+        private Dictionary<UnitStateType, UnitState> states;
+        private UnitState currentState;
+        private UnitStateType currentStateType;
+        private float stateEnterTime;
+
+        // === SQUAD ===
         private SquadController squad;
         private bool isSquadLeader;
 
-        // Public accessors for states
+        // === TARGETING ===
+        private ITargetable currentTarget;
+
+        // === MOVEMENT ===
+        private Vector3 pendingDestination;
+        private bool hasPendingDestination;
+        private bool useThreatAwarePath;
+        private bool hasPendingFightingPositionRequest;  // Prevents overlapping async requests
+        private float lastRepositionTime = -10f;  // When we last requested a new position (for cooldown)
+        private const float REPOSITION_COOLDOWN = 3f;
+
+        public void ClearPendingFightingPositionRequest() => hasPendingFightingPositionRequest = false;
+        public float LastRepositionTime => lastRepositionTime;
+        public float RepositionCooldown => REPOSITION_COOLDOWN;
+        public bool IsRepositionOnCooldown => Time.time - lastRepositionTime < REPOSITION_COOLDOWN;
+        public void ResetRepositionCooldown() => lastRepositionTime = Time.time;
+
+        // === COMBAT ===
+        private float lastFireTime;
+        private float suppression;
+
+        // === LIFECYCLE ===
+        private bool isDestroyed;
+
+        // === STEALTH ===
+        private bool isStealthed;
+
+        // === DUCKED STATE ===
+        private bool isDucked;
+
+        // === ITargetable ===
+        public Vector3 Position => transform.position;
+        Team ITargetable.Team => team;
+        public Transform Transform => transform;
+        public bool IsDead => isDestroyed || (unitHealth != null && unitHealth.IsDead);
+        public bool IsDucked => isDucked;
+
+        // === PUBLIC ACCESSORS ===
         public Team Team => team;
+        public Character Character => character;
         public SquadController Squad => squad;
         public bool IsSquadLeader => isSquadLeader;
-        public Character Character => character;
         public UnitMovement Movement => movement;
         public UnitHealth Health => unitHealth;
         public PerceptionManager PerceptionManager => perceptionManager;
         public GameObject ProjectilePrefab => projectilePrefab;
         public Transform FirePoint => firePoint;
         public float WeaponRange => weaponRange;
+        public float PerceptionRange => perceptionManager != null ? perceptionManager.PerceptionRange : weaponRange * 1.5f;
+        public Posture Posture => posture;
+        public Posture BasePosture => posture;
 
-        /// <summary>
-        /// Get effective posture, factoring in threat level, health, and leader status.
-        /// Leaders play more defensively. High threat + low health = forced defensive.
-        /// </summary>
-        public Posture Posture
-        {
-            get
-            {
-                // If already set to defensive, stay defensive
-                if (posture == Posture.Defensive) return Posture.Defensive;
-
-                // Squad leaders are always at least neutral (never aggressive)
-                if (isSquadLeader && posture == Posture.Aggressive)
-                {
-                    return Posture.Neutral;
-                }
-
-                // Calculate effective threat: threat * (1 + (1 - healthPercent))
-                // At full health: threat * 1.0
-                // At half health: threat * 1.5
-                // At 10% health: threat * 1.9
-                float effectiveThreat = GetEffectiveThreat();
-
-                // Leaders become defensive at lower threat thresholds
-                float threshold = isSquadLeader ? defensiveThreshold * 0.7f : defensiveThreshold;
-
-                if (effectiveThreat > threshold)
-                {
-                    return Posture.Defensive;
-                }
-
-                return posture;
-            }
-        }
-
-        /// <summary>
-        /// Get threat level multiplied by health vulnerability.
-        /// </summary>
-        public float GetEffectiveThreat()
-        {
-            if (perceptionManager == null) return 0f;
-
-            float baseThreat = perceptionManager.GetTotalThreat();
-            float healthPercent = unitHealth != null ? unitHealth.HealthPercent : 1f;
-            float healthMultiplier = 1f + (1f - healthPercent);
-
-            return baseThreat * healthMultiplier;
-        }
-
-        // Suppression tracking
-        private float suppressedUntil;
-        private const float SUPPRESSION_DURATION = 1.5f;
-
-        // Flank response tracking - prevent repeated reactions to flanking
-        private float lastFlankResponseTime;
-        private const float FLANK_RESPONSE_COOLDOWN = 3f;
-
-        /// <summary>
-        /// Is this unit currently being suppressed (projectiles hitting nearby cover)?
-        /// </summary>
-        public bool IsSuppressed => Time.time < suppressedUntil;
-
-        /// <summary>
-        /// Called when a projectile hits cover near this unit.
-        /// </summary>
-        public void ApplySuppression()
-        {
-            suppressedUntil = Time.time + SUPPRESSION_DURATION;
-        }
-
-        /// <summary>
-        /// The actual position projectiles will fire from.
-        /// Use this for LOS checks to ensure consistency with actual shots.
-        /// </summary>
         public Vector3 FirePosition => firePoint != null ? firePoint.position : transform.position;
+        public ITargetable CurrentTarget => currentTarget;
+        public float Suppression => suppression;
+        public bool IsSuppressed => suppression >= SUPPRESSION_PIN_THRESHOLD * 0.5f;
+        public bool HasPendingDestination => hasPendingDestination;
+        public bool ShouldUseThreatAwarePath => useThreatAwarePath;
+        public bool CanShoot => Time.time - lastFireTime >= 1f / fireRate && !NeedsReload;
+        public UnitStateType CurrentStateType => currentStateType;
+        public bool IsStealthed => isStealthed;
 
         /// <summary>
-        /// Is the unit currently in cover from threats?
-        /// Checks against highest threat direction first, then falls back to any known enemies.
+        /// Returns true if unit is actively hiding (ducking behind cover OR in stealth mode).
+        /// Hidden units behind half cover cannot be perceived.
         /// </summary>
+        public bool IsHiding => isStealthed || currentStateType == UnitStateType.Pinned;
+
         public bool IsInCover
         {
             get
@@ -150,51 +150,120 @@ namespace Starbelter.AI
                 var coverQuery = CoverQuery.Instance;
                 if (coverQuery == null) return false;
 
-                // Try threat direction first (most accurate - based on incoming fire)
-                if (perceptionManager != null)
+                // Need a threat position to check cover against
+                Vector3 threatPos = transform.position + Vector3.right * 10f; // Default
+                if (currentTarget != null)
                 {
-                    var threatDir = perceptionManager.GetHighestThreatDirection();
-                    if (threatDir.HasValue)
+                    threatPos = currentTarget.Position;
+                }
+                else if (perceptionManager != null)
+                {
+                    // Use closest visible enemy from perception
+                    var closestEnemy = perceptionManager.GetClosestVisibleEnemy();
+                    if (closestEnemy != null)
                     {
-                        Vector3 threatWorldPos = transform.position + new Vector3(threatDir.Value.x, threatDir.Value.y, 0) * 10f;
-                        var coverCheck = coverQuery.CheckCoverAt(transform.position, threatWorldPos);
-                        return coverCheck.HasCover;
-                    }
-
-                    // No active threat direction - check against known enemies instead
-                    // This allows suppression candidates to be found even if not actively being shot at
-                    var knownEnemies = perceptionManager.GetPerceivedEnemies();
-                    foreach (var enemy in knownEnemies)
-                    {
-                        if (enemy.Unit == null) continue;
-                        var coverCheck = coverQuery.CheckCoverAt(transform.position, enemy.Unit.transform.position);
-                        if (coverCheck.HasCover)
-                        {
-                            return true; // In cover from at least one known enemy
-                        }
+                        threatPos = closestEnemy.transform.position;
                     }
                 }
 
-                // No enemies known or no cover found
-                return false;
+                var coverCheck = coverQuery.CheckCoverAt(transform.position, threatPos);
+                return coverCheck.HasCover;
+            }
+        }
+
+        // Compatibility with old code
+        public bool IsPeeking => currentStateType == UnitStateType.Combat;
+
+        /// <summary>
+        /// Returns true if unit is specifically in half cover (not full cover).
+        /// Used for ducking during reload.
+        /// </summary>
+        public bool IsInHalfCover
+        {
+            get
+            {
+                var coverQuery = CoverQuery.Instance;
+                if (coverQuery == null) return false;
+
+                Vector3 threatPos = transform.position + Vector3.right * 10f;
+                if (currentTarget != null)
+                {
+                    threatPos = currentTarget.Position;
+                }
+                else if (perceptionManager != null)
+                {
+                    var closestEnemy = perceptionManager.GetClosestVisibleEnemy();
+                    if (closestEnemy != null)
+                    {
+                        threatPos = closestEnemy.transform.position;
+                    }
+                }
+
+                var coverCheck = coverQuery.CheckCoverAt(transform.position, threatPos);
+                return coverCheck.HasCover && coverCheck.Type == CoverType.Half;
+            }
+        }
+
+        // === DUCKED STATE ===
+
+        public void SetDucked(bool ducked)
+        {
+            isDucked = ducked;
+        }
+
+        // === RELOAD ===
+
+        /// <summary>
+        /// Returns true if weapon is empty and needs reload.
+        /// </summary>
+        public bool NeedsReload
+        {
+            get
+            {
+                if (character?.MainWeapon == null) return false;
+                return character.MainWeapon.NeedsReload;
             }
         }
 
         /// <summary>
-        /// Is the unit currently peeking (exposed while shooting)?
-        /// Derived from CombatState phase.
+        /// Returns true if should tactically reload (low ammo and in a safe position).
         /// </summary>
-        public bool IsPeeking
+        public bool ShouldTacticalReload
         {
             get
             {
-                var combatState = stateMachine.CurrentState as CombatState;
-                if (combatState == null) return false;
+                if (character?.MainWeapon == null) return false;
+                var weapon = character.MainWeapon;
 
-                var phase = combatState.CurrentPhase;
-                return phase == CombatState.CombatPhase.Standing ||
-                       phase == CombatState.CombatPhase.Aiming ||
-                       phase == CombatState.CombatPhase.Shooting;
+                // Don't tactical reload if more than 30% ammo
+                float ammoPercent = (float)weapon.CurrentAmmo / weapon.MagazineSize;
+                if (ammoPercent > 0.3f) return false;
+
+                // Only tactical reload if in cover and not in immediate danger
+                if (!IsInCover) return false;
+                if (IsInDeadlyDanger()) return false;
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Get the reload time for current weapon.
+        /// </summary>
+        public float GetReloadTime()
+        {
+            if (character?.MainWeapon == null) return 2f; // Default
+            return character.MainWeapon.ReloadTime;
+        }
+
+        /// <summary>
+        /// Complete the reload, refilling magazine.
+        /// </summary>
+        public void FinishReload()
+        {
+            if (character?.MainWeapon != null)
+            {
+                character.MainWeapon.Reload();
             }
         }
 
@@ -202,124 +271,529 @@ namespace Starbelter.AI
         {
             movement = GetComponent<UnitMovement>();
             unitHealth = GetComponentInChildren<UnitHealth>();
+            perceptionManager = GetComponentInChildren<PerceptionManager>();
 
-            // Auto-find PerceptionManager in children if not assigned
-            if (perceptionManager == null)
-            {
-                perceptionManager = GetComponentInChildren<PerceptionManager>();
-            }
-
-            // Sync team and character to PerceptionManager
             if (perceptionManager != null)
             {
                 perceptionManager.MyTeam = team;
                 perceptionManager.SetCharacter(character);
             }
 
-            // Initialize default character if none assigned
             if (character == null)
             {
                 character = new Character();
             }
 
-            // Initialize state machine
-            stateMachine = new UnitStateMachine(this);
+            InitializeStates();
         }
 
         private void Start()
         {
-            // Subscribe to health events
             if (unitHealth != null)
             {
-                unitHealth.OnDamageTaken += OnDamageTaken;
-                unitHealth.OnDodge += OnDodge;
-                unitHealth.OnFlanked += OnFlanked;
                 unitHealth.OnDeath += OnDeath;
             }
 
-            // Apply team color on start (for units placed in scene)
+            if (perceptionManager != null)
+            {
+                perceptionManager.OnUnderFire += OnUnderFire;
+            }
+
+            // Hide radio bubble initially
+            if (radioMessageObject != null)
+            {
+                radioMessageObject.SetActive(false);
+            }
+
             UpdateTeamColor();
+            ChangeState(UnitStateType.Ready);
         }
 
         private void OnDestroy()
         {
+            isDestroyed = true;
+
             if (unitHealth != null)
             {
-                unitHealth.OnDamageTaken -= OnDamageTaken;
-                unitHealth.OnDodge -= OnDodge;
-                unitHealth.OnFlanked -= OnFlanked;
                 unitHealth.OnDeath -= OnDeath;
+            }
+
+            if (perceptionManager != null)
+            {
+                perceptionManager.OnUnderFire -= OnUnderFire;
             }
         }
 
-        private void OnDeath()
+        private void InitializeStates()
         {
-            // Notify squad if this was the leader
-            if (isSquadLeader && squad != null)
+            states = new Dictionary<UnitStateType, UnitState>
             {
-                squad.OnLeaderDied();
-            }
+                { UnitStateType.Ready, new ReadyState() },
+                { UnitStateType.Combat, new CombatState() },
+                { UnitStateType.Moving, new MovingState() },
+                { UnitStateType.Pinned, new PinnedState() },
+                { UnitStateType.Reloading, new ReloadState() }
+            };
         }
 
         private void Update()
         {
-            stateMachine.Update();
+            // Check if we've been destroyed
+            if (isDestroyed) return;
+            if (IsDead) return;
+
+            // Threat-based suppression: standing in dangerous areas builds suppression
+            float threat = GetThreatAtPosition(transform.position);
+            float oldSuppression = suppression;
+
+            // Suppression GAIN from threat
+            if (threat > 0)
+            {
+                // At threat 10 (dangerous), gain ~10 suppression/sec
+                // At threat 20 (deadly), gain ~20 suppression/sec
+                float suppressionGain = threat * Time.deltaTime;
+                suppression += suppressionGain;
+            }
+
+            // Suppression DECAY - always happens, but rate depends on threat level
+            // High threat = slow decay, Low/no threat = fast decay
+            float decayRate;
+            if (threat >= THREAT_DEADLY)
+            {
+                decayRate = SUPPRESSION_DECAY_HIGH_THREAT;  // 2/sec - barely recovering
+            }
+            else if (threat >= THREAT_DANGEROUS)
+            {
+                decayRate = SUPPRESSION_DECAY_MED_THREAT;   // 8/sec - moderate recovery
+            }
+            else
+            {
+                decayRate = SUPPRESSION_DECAY_LOW_THREAT;   // 20/sec - fast recovery
+            }
+
+            suppression -= decayRate * Time.deltaTime;
+            suppression = Mathf.Clamp(suppression, 0f, 100f);
+
+            // Log when crossing thresholds
+            if (oldSuppression < 40f && suppression >= 40f)
+                Debug.Log($"[{gameObject.name}] Suppression rising: {suppression:F0} (threat={threat:F1})");
+            if (oldSuppression < SUPPRESSION_PIN_THRESHOLD && suppression >= SUPPRESSION_PIN_THRESHOLD)
+                Debug.Log($"[{gameObject.name}] PINNED! Suppression={suppression:F0} (threat={threat:F1})");
+
+            // Update current state
+            currentState?.Update();
         }
 
-        private void OnDamageTaken(float damage)
-        {
-            // Notify combat state to interrupt shooting
-            var combatState = stateMachine.CurrentState as CombatState;
-            combatState?.OnDamageTaken();
+        // === STATE MANAGEMENT ===
 
-            // If in CombatState and in cover phase, consider seeking better cover
-            // Getting hit while in cover means our cover might not be good enough
-            if (combatState != null && combatState.CurrentPhase == CombatState.CombatPhase.InCover)
-            {
-                // High urgency - we got hit! Low threshold to move
-                var seekCoverState = new SeekCoverState(CoverUrgency.High);
-                stateMachine.ChangeState(seekCoverState);
-            }
+        public void ChangeState(UnitStateType newState)
+        {
+            if (isDestroyed || IsDead) return;
+
+            string oldState = currentStateType.ToString();
+
+            currentState?.Exit();
+
+            currentStateType = newState;
+            currentState = states[newState];
+            currentState.Initialize(this);
+            currentState.Enter();
+            stateEnterTime = Time.time;
+
+            Debug.Log($"[{name}] {oldState} -> {newState}");
         }
 
-        private void OnDodge()
+        public string GetCurrentStateName() => currentStateType.ToString();
+
+        protected float TimeInState => Time.time - stateEnterTime;
+        public bool CanTransition => TimeInState >= MIN_STATE_TIME;
+
+        // === TARGETING ===
+
+        public void SetTarget(ITargetable target)
         {
-            // If in CombatState and in cover phase, consider seeking better cover
-            // Dodging means we're being shot at - might want better cover
-            var combatState = stateMachine.CurrentState as CombatState;
-            if (combatState != null && combatState.CurrentPhase == CombatState.CombatPhase.InCover)
-            {
-                // Medium urgency - we dodged, but still taking fire. Moderate threshold.
-                var seekCoverState = new SeekCoverState(CoverUrgency.Medium);
-                stateMachine.ChangeState(seekCoverState);
-            }
+            currentTarget = target;
         }
 
-        private void OnFlanked(Vector2 flankDirection)
+        public void ClearTarget()
         {
-            // Don't interrupt if already seeking cover
-            if (stateMachine.CurrentState is SeekCoverState)
-            {
-                return;
-            }
-
-            // Don't react to flanking too frequently - prevents jittering
-            if (Time.time - lastFlankResponseTime < FLANK_RESPONSE_COOLDOWN)
-            {
-                Debug.Log($"[{name}]  OnFlanked: Cooldown active, ignoring ({Time.time - lastFlankResponseTime:F1}s since last)");
-                return;
-            }
-            lastFlankResponseTime = Time.time;
-
-            Debug.Log($"[{name}] OnFlanked: Seeking cover from direction {flankDirection}");
-            // Force seek new cover that protects from the flanking direction
-            var seekCoverState = new SeekCoverState(flankDirection);
-            stateMachine.ChangeState(seekCoverState);
+            currentTarget = null;
         }
 
         /// <summary>
-        /// Change the unit's team at runtime.
+        /// Check if current target is valid (not null, not destroyed, not dead).
+        /// Handles Unity's "fake null" for destroyed objects.
         /// </summary>
+        public bool IsTargetValid()
+        {
+            if (currentTarget == null) return false;
+
+            // Check if the Unity object has been destroyed
+            var mb = currentTarget as MonoBehaviour;
+            if (mb == null) return false;
+
+            return !currentTarget.IsDead;
+        }
+
+        // === THREAT QUERIES ===
+
+        public float GetThreatAtPosition(Vector3 pos)
+        {
+            if (TileThreatMap.Instance == null) return 0f;
+            return TileThreatMap.Instance.GetThreatAtWorld(pos, team);
+        }
+
+        public bool IsInDanger() => GetThreatAtPosition(transform.position) >= THREAT_DANGEROUS;
+        public bool IsInDeadlyDanger() => GetThreatAtPosition(transform.position) >= THREAT_DEADLY;
+
+        // === MOVEMENT REQUESTS ===
+
+        public void RequestCoverPosition()
+        {
+            // Need a threat position to find cover from
+            Vector3 threatPos = transform.position + Vector3.right * 10f; // Default
+            if (currentTarget != null)
+            {
+                threatPos = currentTarget.Position;
+            }
+
+            var coverPositions = FindCoverPositions(transform.position, COVER_SEARCH_RADIUS, threatPos);
+            if (coverPositions.Count == 0)
+            {
+                hasPendingDestination = false;
+                return;
+            }
+
+            // Score and pick best cover
+            float bestScore = float.MinValue;
+            Vector3 bestPos = transform.position;
+
+            foreach (var pos in coverPositions)
+            {
+                float score = ScorePosition(pos);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestPos = pos;
+                }
+            }
+
+            pendingDestination = bestPos;
+            hasPendingDestination = true;
+        }
+
+        /// <summary>
+        /// Find a fighting position - cover with LOS to at least one enemy.
+        /// Works even without a current target. Use when squad is engaged but unit can't see anyone.
+        /// Uses async A* path queries for accurate scoring.
+        /// NOTE: This is ASYNC - hasPendingDestination will only be true AFTER the callback fires.
+        /// Callers should NOT check HasPendingDestination immediately after calling this.
+        /// </summary>
+        public void RequestFightingPosition()
+        {
+            // Prevent overlapping async requests
+            if (hasPendingFightingPositionRequest)
+            {
+                return;
+            }
+
+            // Clear immediately - destination won't be valid until async callback completes
+            hasPendingDestination = false;
+            useThreatAwarePath = false;
+
+            var coverQuery = CoverQuery.Instance;
+            if (coverQuery == null)
+            {
+                return;
+            }
+
+            hasPendingFightingPositionRequest = true;
+
+            // Get known enemies from perception for defensive cover scoring
+            List<GameObject> knownEnemies = null;
+            if (perceptionManager != null)
+            {
+                var perceived = perceptionManager.GetPerceivedEnemies();
+                knownEnemies = new List<GameObject>(perceived.Count);
+                foreach (var p in perceived)
+                {
+                    if (p.Unit != null)
+                        knownEnemies.Add(p.Unit);
+                }
+            }
+
+            CombatUtils.FindFightingPositionAsync(
+                transform.position,
+                weaponRange,
+                coverQuery,
+                gameObject,
+                team,
+                squad?.RallyPointPosition,
+                isSquadLeader,
+                character?.Tactics ?? 10,
+                knownEnemies,
+                OnFightingPositionFound
+            );
+        }
+
+        private void OnFightingPositionFound(FightingPositionResult result)
+        {
+            if (IsDead || isDestroyed)
+            {
+                hasPendingFightingPositionRequest = false;
+                return;
+            }
+
+            // If we're already moving, ignore this callback (stale request)
+            if (movement.IsMoving || currentStateType == UnitStateType.Moving)
+            {
+                hasPendingFightingPositionRequest = false;
+                return;
+            }
+
+            if (!result.Found)
+            {
+                hasPendingFightingPositionRequest = false;
+                return;
+            }
+
+            // Only set destination if we actually need to move
+            float distToPosition = Vector2.Distance(transform.position, result.Position);
+            if (distToPosition <= 1f)
+            {
+                // Already at best position - clear flag and stay put
+                hasPendingFightingPositionRequest = false;
+                hasPendingDestination = false;
+                useThreatAwarePath = false;
+
+                // If we found a target, set it
+                if (result.BestTarget != null)
+                {
+                    var targetable = result.BestTarget.GetComponent<ITargetable>();
+                    if (targetable != null && !targetable.IsDead)
+                    {
+                        SetTarget(targetable);
+                    }
+                }
+                return;
+            }
+
+            // SANITY CHECK: Don't go to origin unless we're actually near it
+            if (result.Position.sqrMagnitude < 0.01f && transform.position.sqrMagnitude > 1f)
+            {
+                Debug.LogError($"[{name}] REJECTING (0,0,0) destination! Current pos={transform.position}");
+                hasPendingFightingPositionRequest = false;
+                hasPendingDestination = false;
+                return;
+            }
+
+            // If we found a target from this position, set it
+            if (result.BestTarget != null)
+            {
+                var targetable = result.BestTarget.GetComponent<ITargetable>();
+                if (targetable != null && !targetable.IsDead)
+                {
+                    SetTarget(targetable);
+                }
+            }
+
+            pendingDestination = result.Position;
+            hasPendingDestination = true;
+            useThreatAwarePath = true;
+
+            // Keep hasPendingFightingPositionRequest = true until we start moving
+            // This prevents new requests from being made while we're about to move
+
+            // Trigger state transition - only if in Ready or Combat
+            if (currentStateType == UnitStateType.Ready || currentStateType == UnitStateType.Combat)
+            {
+                ChangeState(UnitStateType.Moving);
+                // Flag will be cleared when MovingState.Enter() starts the move
+            }
+            else
+            {
+                // Can't transition, clear the flag
+                hasPendingFightingPositionRequest = false;
+            }
+        }
+
+        private float ScorePosition(Vector3 pos)
+        {
+            float score = 0f;
+
+            // Distance penalty
+            float dist = Vector3.Distance(transform.position, pos);
+            score -= dist * 1f;
+
+            // Threat penalty
+            float threat = GetThreatAtPosition(pos);
+            score -= threat * 2f;
+
+            // Cover bonus
+            if (currentTarget != null)
+            {
+                var coverCheck = CoverQuery.Instance?.CheckCoverAt(pos, currentTarget.Position);
+                if (coverCheck.HasValue && coverCheck.Value.HasCover)
+                {
+                    score += coverCheck.Value.Type == CoverType.Full ? 10f : 5f;
+                }
+
+                // LOS bonus
+                if (HasLineOfSight(pos, currentTarget.Position))
+                {
+                    score += 3f;
+                }
+            }
+
+            return score;
+        }
+
+        private List<Vector3> FindCoverPositions(Vector3 center, float radius, Vector3 threatPos)
+        {
+            var results = new List<Vector3>();
+            if (CoverQuery.Instance == null) return results;
+
+            float step = 1f;
+            for (float x = -radius; x <= radius; x += step)
+            {
+                for (float y = -radius; y <= radius; y += step)
+                {
+                    Vector3 samplePos = center + new Vector3(x, y, 0);
+                    if (Vector3.Distance(center, samplePos) > radius) continue;
+
+                    var coverCheck = CoverQuery.Instance.CheckCoverAt(samplePos, threatPos);
+                    if (coverCheck.HasCover)
+                    {
+                        results.Add(samplePos);
+                    }
+                }
+            }
+
+            return results;
+        }
+
+        // === MOVEMENT EXECUTION ===
+
+        public void StartMoving()
+        {
+            if (!hasPendingDestination) return;
+            movement.MoveTo(pendingDestination);
+            hasPendingDestination = false;
+            useThreatAwarePath = false;
+        }
+
+        /// <summary>
+        /// Start moving using threat-aware pathfinding.
+        /// Routes will avoid high-threat tiles where possible.
+        /// </summary>
+        public void StartThreatAwareMove()
+        {
+            if (!hasPendingDestination) return;
+            movement.RequestThreatAwarePath(pendingDestination, team);
+            hasPendingDestination = false;
+            useThreatAwarePath = false;
+        }
+
+        public void StopMoving()
+        {
+            movement.Stop();
+        }
+
+        /// <summary>
+        /// Interrupts movement but redirects to nearest tile center first.
+        /// Use this when interrupting movement (suppression, state change) to avoid stopping mid-tile.
+        /// </summary>
+        public void InterruptMovement()
+        {
+            movement.StopAtNearestTile();
+        }
+
+        public bool HasArrivedAtDestination => !movement.IsMoving;
+
+        // === COMBAT ===
+
+        public void FireAtTarget()
+        {
+            if (currentTarget == null || projectilePrefab == null) return;
+
+            // Check ammo - don't fire if empty
+            if (character?.MainWeapon != null)
+            {
+                if (!character.MainWeapon.ConsumeAmmo())
+                {
+                    // Out of ammo - can't fire
+                    return;
+                }
+            }
+
+            Vector3 spawnPos = firePoint != null ? firePoint.position : transform.position;
+            Vector2 direction = (currentTarget.Position - spawnPos).normalized;
+
+            GameObject projObj = Instantiate(projectilePrefab, spawnPos, Quaternion.identity);
+            var projectile = projObj.GetComponent<Projectile>();
+            if (projectile != null)
+            {
+                projectile.Fire(direction, team, gameObject);
+            }
+
+            lastFireTime = Time.time;
+        }
+
+        public void ApplySuppression(float amount = 20f)
+        {
+            suppression += amount;
+            suppression = Mathf.Min(suppression, 100f);
+        }
+
+        // === LINE OF SIGHT ===
+
+        public bool HasLineOfSight(Vector3 from, Vector3 to)
+        {
+            int obstacleMask = LayerMask.GetMask("Obstacles", "Cover");
+            Vector2 direction = (to - from);
+            float distance = direction.magnitude;
+            return !Physics2D.Raycast(from, direction.normalized, distance, obstacleMask);
+        }
+
+        // === TARGET FINDING ===
+
+        public ITargetable FindClosestVisibleEnemy(float maxRange = float.MaxValue)
+        {
+            ITargetable closest = null;
+            float closestDist = maxRange;
+            var coverQuery = CoverQuery.Instance;
+
+            var allTargets = FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            foreach (var mb in allTargets)
+            {
+                var targetable = mb as ITargetable;
+                if (targetable == null) continue;
+                if (targetable.Team == team || targetable.Team == Team.Neutral) continue;
+                if (targetable.IsDead) continue;
+
+                // Ducked targets behind half cover are treated as having full cover (not visible)
+                if (targetable.IsDucked && coverQuery != null)
+                {
+                    var coverCheck = coverQuery.CheckCoverAt(targetable.Position, transform.position);
+                    if (coverCheck.HasCover && coverCheck.Type == CoverType.Half)
+                    {
+                        continue; // Target is ducked behind half cover - can't see them
+                    }
+                }
+
+                float dist = Vector3.Distance(transform.position, targetable.Position);
+                if (dist < closestDist && HasLineOfSight(transform.position, targetable.Position))
+                {
+                    closestDist = dist;
+                    closest = targetable;
+                }
+            }
+
+            return closest;
+        }
+
+        // === TEAM/SQUAD SETUP ===
+
         public void SetTeam(Team newTeam)
         {
             team = newTeam;
@@ -330,60 +804,16 @@ namespace Starbelter.AI
             UpdateTeamColor();
         }
 
-        /// <summary>
-        /// Assign this unit to a squad and optionally make it the leader.
-        /// </summary>
         public void SetSquad(SquadController newSquad, bool isLeader = false)
         {
             squad = newSquad;
             isSquadLeader = isLeader;
         }
 
-        /// <summary>
-        /// Get the squad leader's position, or null if no squad/leader.
-        /// </summary>
-        public Vector3? GetLeaderPosition()
-        {
-            if (squad == null) return null;
-            if (isSquadLeader) return null; // Leader doesn't follow itself
-            return squad.GetLeaderPosition();
-        }
-
-        /// <summary>
-        /// Get the squad rally point, or null if no squad.
-        /// </summary>
-        public Vector3? GetRallyPoint()
-        {
-            if (squad == null) return null;
-            return squad.RallyPointPosition;
-        }
-
-        /// <summary>
-        /// Updates the sprite color based on team.
-        /// </summary>
-        private void UpdateTeamColor()
-        {
-            var spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-            if (spriteRenderer == null) return;
-
-            spriteRenderer.color = team switch
-            {
-                Team.Federation => new Color(0.5f, 0.7f, 1f),  // Light blue - Federation
-                Team.Empire => new Color(1f, 0.5f, 0.5f),      // Light red - Empire
-                Team.Neutral => Color.white,
-                _ => Color.white
-            };
-        }
-
-        /// <summary>
-        /// Assign a character to this unit (call before or during spawn).
-        /// Also renames the GameObject to match the character.
-        /// </summary>
         public void SetCharacter(Character newCharacter)
         {
             character = newCharacter;
 
-            // Rename GameObject to match character
             if (character != null)
             {
                 string teamPrefix = team == Team.Federation ? "FED" : (team == Team.Empire ? "IMP" : "NEUTRAL");
@@ -392,93 +822,209 @@ namespace Starbelter.AI
             }
         }
 
-        /// <summary>
-        /// Request a state transition.
-        /// </summary>
-        public void ChangeState<T>() where T : UnitState, new()
-        {
-            stateMachine.ChangeState<T>();
-        }
-
-        /// <summary>
-        /// Get the current state type name (for debugging).
-        /// </summary>
-        public string GetCurrentStateName()
-        {
-            return stateMachine.CurrentStateName;
-        }
-
-        /// <summary>
-        /// Command this unit to suppress a specific target.
-        /// Called by SquadController for coordinated suppression.
-        /// </summary>
-        public void CommandSuppress(GameObject target)
-        {
-            if (target == null || IsDead) return;
-
-            Debug.Log($"[{name}] CommandSuppress: Ordered to suppress {target.name}");
-            var suppressState = new SuppressState(target);
-            stateMachine.ChangeState(suppressState);
-        }
-
-        /// <summary>
-        /// Set the unit's combat posture.
-        /// Called by SquadController to synchronize squad posture.
-        /// </summary>
         public void SetPosture(Posture newPosture)
         {
             posture = newPosture;
         }
 
-#if UNITY_EDITOR
-        private void OnDrawGizmosSelected()
+        public void SetStealthed(bool stealthed)
         {
-            // Show current state name above unit
-            if (stateMachine != null)
+            isStealthed = stealthed;
+        }
+
+        private void UpdateTeamColor()
+        {
+            var spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+            if (spriteRenderer == null) return;
+
+            spriteRenderer.color = team switch
             {
-                UnityEditor.Handles.Label(
-                    transform.position + Vector3.up * 1.5f,
-                    $"State: {stateMachine.CurrentStateName}"
-                );
+                Team.Federation => new Color(0.5f, 0.7f, 1f),
+                Team.Empire => new Color(1f, 0.5f, 0.5f),
+                Team.Neutral => Color.white,
+                _ => Color.white
+            };
+        }
+
+        private void OnDeath()
+        {
+            // Notify squad about our death
+            if (squad != null)
+            {
+                squad.NotifyAllyDown(this);
+
+                if (isSquadLeader)
+                {
+                    squad.OnLeaderDied();
+                }
+            }
+        }
+
+        private void OnUnderFire(PerceivedUnit shooter)
+        {
+            string shooterName = shooter.Unit != null ? shooter.Unit.name : "unknown";
+
+            // Don't react if we're already moving or have a pending destination
+            if (movement.IsMoving || hasPendingDestination || hasPendingFightingPositionRequest)
+            {
+                Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - SKIPPED (already moving/pending)");
+                return;
             }
 
-            // Draw threat directions from PerceptionManager
-            if (perceptionManager != null)
+            // Don't react if pinned - can't move anyway
+            if (currentStateType == UnitStateType.Pinned)
             {
-                var threats = perceptionManager.GetActiveThreats(0.5f);
-                foreach (var threat in threats)
+                Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - SKIPPED (pinned)");
+                return;
+            }
+
+            Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - requesting new position");
+
+            // Set the shooter as our target if we don't have one
+            if (currentTarget == null && shooter.Unit != null)
+            {
+                var targetable = shooter.Unit.GetComponent<ITargetable>();
+                if (targetable != null && !targetable.IsDead)
                 {
-                    // Red line toward highest threat direction
-                    Gizmos.color = new Color(1f, 0.3f, 0.3f, 0.8f);
-                    Vector3 threatWorldPos = transform.position + new Vector3(threat.Direction.x, threat.Direction.y, 0) * 5f;
-                    Gizmos.DrawLine(transform.position, threatWorldPos);
-
-                    // Arrow head
-                    Vector3 arrowDir = (threatWorldPos - transform.position).normalized;
-                    Vector3 arrowRight = Vector3.Cross(arrowDir, Vector3.forward) * 0.3f;
-                    Gizmos.DrawLine(threatWorldPos, threatWorldPos - arrowDir * 0.5f + arrowRight);
-                    Gizmos.DrawLine(threatWorldPos, threatWorldPos - arrowDir * 0.5f - arrowRight);
-
-                    // Label threat level
-                    UnityEditor.Handles.Label(threatWorldPos + Vector3.up * 0.3f, $"T:{threat.ThreatLevel:F1}");
+                    SetTarget(targetable);
                 }
             }
 
-            // Draw last cover search result if it was for this unit
-            var (searchUnit, coverPos, threatPos, searchTime) = CoverQuery.GetLastSearchDebug();
-            if (searchUnit == gameObject && Time.time - searchTime < 3f)
+            // Force tactical reevaluation - find better position
+            ResetRepositionCooldown();
+            RequestFightingPosition();
+        }
+
+        // === SQUAD HELPERS ===
+
+        public Vector3? GetLeaderPosition()
+        {
+            if (squad == null) return null;
+            if (isSquadLeader) return null;
+            return squad.GetLeaderPosition();
+        }
+
+        public Vector3? GetRallyPoint()
+        {
+            if (squad == null) return null;
+            return squad.RallyPointPosition;
+        }
+
+        /// <summary>
+        /// Alert squad that this unit spotted an enemy. Triggers FIRST_CONTACT if squad not yet engaged.
+        /// </summary>
+        public void AlertSquadFirstContact(Vector3 enemyPosition)
+        {
+            if (squad != null)
             {
-                // Green line to chosen cover
+                squad.AlertSquadContact(this, enemyPosition);
+            }
+        }
+
+        /// <summary>
+        /// Notify squad that this unit killed an enemy.
+        /// </summary>
+        public void NotifySquadEnemyKilled()
+        {
+            if (squad != null)
+            {
+                squad.NotifyEnemyKilled(this);
+            }
+        }
+
+        // === COMPATIBILITY METHODS ===
+        // These exist so SquadController doesn't need major changes
+
+        public void CommandSuppress(GameObject target)
+        {
+            // Simplified: just target and enter combat
+            var targetable = target?.GetComponent<ITargetable>();
+            if (targetable != null)
+            {
+                SetTarget(targetable);
+                ChangeState(UnitStateType.Combat);
+            }
+        }
+
+        public float GetEffectiveThreat()
+        {
+            return GetThreatAtPosition(transform.position);
+        }
+
+        // === RADIO UI ===
+
+        /// <summary>
+        /// Show a radio message using an event name from RadioLines.json.
+        /// Automatically picks a random variant for that event.
+        /// </summary>
+        /// <param name="eventName">Event name like "FIRST_CONTACT", "ENEMY_DOWN", etc.</param>
+        /// <param name="duration">How long to show the message</param>
+        public void ShowRadioMessage(string eventName, float duration = 2f)
+        {
+            if (radioMessageObject == null || radioText == null) return;
+
+            string message = DataLoader.GetRadioLine(eventName);
+            radioText.text = message;
+            radioMessageObject.SetActive(true);
+
+            CancelInvoke(nameof(HideRadioMessage));
+            Invoke(nameof(HideRadioMessage), duration);
+        }
+
+        /// <summary>
+        /// Show a radio message after a random delay (0.5-2.5 seconds) for realism.
+        /// </summary>
+        public void ShowRadioMessageDelayed(string eventName, float minDelay = 0.5f, float maxDelay = 2.5f)
+        {
+            if (radioMessageObject == null || radioText == null) return;
+
+            float delay = Random.Range(minDelay, maxDelay);
+            StartCoroutine(ShowRadioMessageAfterDelay(eventName, delay));
+        }
+
+        private System.Collections.IEnumerator ShowRadioMessageAfterDelay(string eventName, float delay)
+        {
+            yield return new WaitForSeconds(delay);
+
+            if (!IsDead)
+            {
+                ShowRadioMessage(eventName);
+            }
+        }
+
+        private void HideRadioMessage()
+        {
+            if (radioMessageObject != null)
+            {
+                radioMessageObject.SetActive(false);
+            }
+        }
+
+#if UNITY_EDITOR
+        private void OnDrawGizmosSelected()
+        {
+            // Draw current state
+            UnityEditor.Handles.Label(
+                transform.position + Vector3.up * 1.5f,
+                $"State: {currentStateType}"
+            );
+
+            // Draw target line
+            if (currentTarget != null)
+            {
+                Gizmos.color = Color.red;
+                Gizmos.DrawLine(transform.position, currentTarget.Position);
+            }
+
+            // Draw weapon range
+            Gizmos.color = new Color(1f, 1f, 0f, 0.2f);
+            Gizmos.DrawWireSphere(transform.position, weaponRange);
+
+            // Draw pending destination
+            if (hasPendingDestination)
+            {
                 Gizmos.color = Color.green;
-                Gizmos.DrawLine(transform.position, coverPos);
-                Gizmos.DrawWireCube(coverPos, Vector3.one * 0.6f);
-
-                // Yellow line from cover to threat
-                Gizmos.color = Color.yellow;
-                Gizmos.DrawLine(coverPos, threatPos);
-
-                // Label
-                UnityEditor.Handles.Label(coverPos + Vector3.up * 0.5f, "Chosen Cover");
+                Gizmos.DrawWireSphere(pendingDestination, 0.5f);
             }
         }
 #endif

@@ -146,9 +146,6 @@ namespace Starbelter.Combat
                     return; // No enemy using this cover - pass through
                 }
 
-                // Apply suppression to enemies near this cover
-                ApplySuppressionNearCover(structure.transform.position);
-
                 // Enemy is using this cover - let structure decide if it blocks
                 if (structure.TryBlockProjectile(this))
                 {
@@ -228,21 +225,5 @@ namespace Starbelter.Combat
             return false;
         }
 
-        /// <summary>
-        /// Apply suppression to any enemy units near this cover.
-        /// </summary>
-        private void ApplySuppressionNearCover(Vector2 coverPosition)
-        {
-            var colliders = Physics2D.OverlapCircleAll(coverPosition, coverEffectiveRadius);
-
-            foreach (var col in colliders)
-            {
-                var unitController = col.GetComponentInParent<AI.UnitController>();
-                if (unitController != null && unitController.Team != sourceTeam)
-                {
-                    unitController.ApplySuppression();
-                }
-            }
-        }
     }
 }

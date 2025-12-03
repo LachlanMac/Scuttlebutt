@@ -16,6 +16,9 @@ namespace Starbelter.Core
         private static Dictionary<string, Character> enemyRoster;
         private static bool rostersLoaded = false;
 
+        private static Dictionary<string, string[]> radioLines;
+        private static bool radioLinesLoaded = false;
+
         /// <summary>
         /// Get a weapon by ID. Returns null if not found.
         /// </summary>
@@ -124,9 +127,89 @@ namespace Starbelter.Core
             rostersLoaded = false;
             allyRoster = null;
             enemyRoster = null;
+            radioLinesLoaded = false;
+            radioLines = null;
             EnsureWeaponsLoaded();
             EnsureRostersLoaded();
+            EnsureRadioLinesLoaded();
         }
+
+        #region Radio Lines
+
+        /// <summary>
+        /// Get a random radio line for the given event.
+        /// Returns the event name if no lines found (fallback).
+        /// </summary>
+        public static string GetRadioLine(string eventName)
+        {
+            EnsureRadioLinesLoaded();
+
+            if (radioLines.TryGetValue(eventName, out var variants) && variants.Length > 0)
+            {
+                return variants[Random.Range(0, variants.Length)];
+            }
+
+            // Fallback: return event name formatted nicely
+            return eventName.Replace("_", " ");
+        }
+
+        /// <summary>
+        /// Check if a radio event exists.
+        /// </summary>
+        public static bool HasRadioEvent(string eventName)
+        {
+            EnsureRadioLinesLoaded();
+            return radioLines.ContainsKey(eventName);
+        }
+
+        /// <summary>
+        /// Get all event names.
+        /// </summary>
+        public static IEnumerable<string> GetRadioEventNames()
+        {
+            EnsureRadioLinesLoaded();
+            return radioLines.Keys;
+        }
+
+        private static void EnsureRadioLinesLoaded()
+        {
+            if (radioLinesLoaded) return;
+            LoadRadioLines();
+        }
+
+        private static void LoadRadioLines()
+        {
+            radioLines = new Dictionary<string, string[]>();
+
+            var jsonAsset = Resources.Load<TextAsset>("Data/RadioLines");
+            if (jsonAsset == null)
+            {
+                Debug.LogWarning("[DataLoader] Failed to load RadioLines.json from Resources/Data/");
+                radioLinesLoaded = true;
+                return;
+            }
+
+            var data = JsonUtility.FromJson<RadioLinesDataFile>(jsonAsset.text);
+            if (data?.radioLines == null)
+            {
+                Debug.LogError("[DataLoader] Failed to parse RadioLines.json");
+                radioLinesLoaded = true;
+                return;
+            }
+
+            foreach (var entry in data.radioLines)
+            {
+                if (!string.IsNullOrEmpty(entry.@event) && entry.variants != null)
+                {
+                    radioLines[entry.@event] = entry.variants;
+                }
+            }
+
+            Debug.Log($"[DataLoader] Loaded {radioLines.Count} radio events");
+            radioLinesLoaded = true;
+        }
+
+        #endregion
 
         #region Character Roster
 
@@ -507,6 +590,19 @@ namespace Starbelter.Core
             public int perception;
             public int stealth;
             public int tactics;
+        }
+
+        [System.Serializable]
+        private class RadioLinesDataFile
+        {
+            public RadioLineEntry[] radioLines;
+        }
+
+        [System.Serializable]
+        private class RadioLineEntry
+        {
+            public string @event;  // @ prefix because 'event' is a C# keyword
+            public string[] variants;
         }
     }
 }

@@ -16,25 +16,84 @@ namespace Starbelter.Core
         [SerializeField] private Team team = Team.Empire;
         [SerializeField] private float fireRate = 0.2f;
 
+        [Header("Character")]
+        [SerializeField] private string playerName = "Player";
+        [SerializeField] private float defaultWeaponRange = 15f;
+
         private Camera mainCamera;
         private float nextFireTime;
         private UnitHealth unitHealth;
+        private Character character;
+        private bool isDucked;
+        private Vector3 normalScale;
 
         // ITargetable implementation
         public Team Team => team;
         public Transform Transform => transform;
+        public Vector3 Position => transform.position;
         public bool IsDead => unitHealth != null && unitHealth.IsDead;
+        public float WeaponRange => character?.MainWeapon?.MaxRange ?? defaultWeaponRange;
+        public bool IsDucked => isDucked;
+
+        public Character Character => character;
+
+        private void Awake()
+        {
+            normalScale = transform.localScale;
+
+            // Create default character for player
+            character = new Character
+            {
+                FirstName = playerName,
+                LastName = "",
+                IsOfficer = false,
+                EnlistedRank = MarineEnlistedRank.Sergeant,
+                Specialization = Specialization.Rifleman,
+                MainWeaponId = "assault_rifle",
+                Vitality = 12,
+                Accuracy = 12,
+                Reflex = 12,
+                Bravery = 15,
+                Agility = 12,
+                Perception = 12,
+                Stealth = 10,
+                Tactics = 10
+            };
+        }
 
         private void Start()
         {
             mainCamera = Camera.main;
             unitHealth = GetComponentInChildren<UnitHealth>();
+
+            // Try to load weapon from data, fall back to default range
+            character.LoadWeapon();
+            if (character.MainWeapon == null)
+            {
+                Debug.LogWarning($"[PlayerController] Could not load weapon '{character.MainWeaponId}', using default range {defaultWeaponRange}");
+            }
+
+            // Initialize character health
+            character.InitializeHealth();
         }
 
         private void Update()
         {
             HandleMovement();
             HandleShooting();
+            HandleDuck();
+        }
+
+        private void HandleDuck()
+        {
+            if (Input.GetKeyDown(KeyCode.X))
+            {
+                isDucked = !isDucked;
+                transform.localScale = isDucked
+                    ? new Vector3(normalScale.x, normalScale.y * 0.7f, normalScale.z)
+                    : normalScale;
+                Debug.Log($"[Player] Ducked: {isDucked}");
+            }
         }
 
         private void HandleMovement()

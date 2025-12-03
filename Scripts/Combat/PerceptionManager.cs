@@ -17,8 +17,8 @@ namespace Starbelter.Combat
         #region Settings
 
         [Header("Perception Settings")]
-        [Tooltip("Maximum distance to detect enemies")]
-        [SerializeField] private float perceptionRange = 15f;
+        [Tooltip("Maximum distance to detect enemies (should be > weapon range so units spot before they can shoot)")]
+        [SerializeField] private float perceptionRange = 25f;
 
         [Tooltip("How often to run perception checks (seconds)")]
         [SerializeField] private float checkInterval = 1f;
@@ -30,9 +30,6 @@ namespace Starbelter.Combat
         [SerializeField] private Team myTeam = Team.Federation;
 
         [Header("Threat Settings")]
-        [Tooltip("Time in seconds for threat to decay from max to zero")]
-        [SerializeField] private float decayTime = 20f;
-
         [Tooltip("Time in seconds for aimed shot threat to decay by 1 point")]
         [SerializeField] private float aimedShotDecayTime = 10f;
 
@@ -49,12 +46,6 @@ namespace Starbelter.Combat
 
         // Perceived units dictionary
         private Dictionary<GameObject, PerceivedUnit> perceivedUnits = new Dictionary<GameObject, PerceivedUnit>();
-
-        // Directional threat buckets (for quick threat direction queries)
-        private const int BUCKET_COUNT = 16;
-        private const float DEGREES_PER_BUCKET = 360f / BUCKET_COUNT;
-        private float[] threatBuckets = new float[BUCKET_COUNT];
-        private float maxThreatEver = 1f;
 
         private float checkTimer;
 
@@ -77,6 +68,12 @@ namespace Starbelter.Combat
         /// </summary>
         public event System.Action<PerceivedUnit> OnContactUpdated;
 
+        /// <summary>
+        /// Fired when this unit detects incoming fire (projectile enters threat range).
+        /// Passes the enemy who shot at us.
+        /// </summary>
+        public event System.Action<PerceivedUnit> OnUnderFire;
+
         #endregion
 
         #region Public Properties
@@ -94,6 +91,23 @@ namespace Starbelter.Combat
         #region Initialization
 
         public void SetCharacter(Character c) => character = c;
+
+        /// <summary>
+        /// Get perception modifier based on unit's current state.
+        /// Ready: 1.5x, Pinned: 0.75x, Others: 1.0x
+        /// </summary>
+        private float GetStatePerceptionModifier()
+        {
+            var unitController = GetComponentInParent<UnitController>();
+            if (unitController == null) return 1f;
+
+            return unitController.CurrentStateType switch
+            {
+                UnitStateType.Ready => 1.5f,
+                UnitStateType.Pinned => 0.75f,
+                _ => 1f
+            };
+        }
 
         private void Awake()
         {
@@ -119,9 +133,6 @@ namespace Starbelter.Combat
                 PerformPerceptionCheck();
             }
 
-            // Decay threat buckets
-            DecayThreats();
-
             // Decay aimed shot threat on all contacts
             DecayAimedShotThreats();
 
@@ -143,15 +154,10 @@ namespace Starbelter.Combat
             // Ignore neutral projectiles
             if (projectile.SourceTeam == Team.Neutral) return;
 
-            // Register directional threat from projectile origin
-            Vector2 threatDirection = (projectile.Origin - (Vector2)transform.position).normalized;
-            RegisterDirectionalThreat(threatDirection, projectile.Damage);
-            Debug.Log($"[{transform.root.name}] Threat registered: {projectile.Damage} from {threatDirection}{(projectile.IsAimedShot ? " [AIMED]" : "")}");
-
             // Track who shot at us - instant Confirmed awareness
             if (projectile.SourceUnit != null)
             {
-                RegisterEnemyShot(projectile.SourceUnit, 0f, projectile.IsAimedShot);
+                RegisterEnemyShot(projectile.SourceUnit, projectile.Damage, projectile.IsAimedShot);
             }
         }
 
@@ -188,6 +194,9 @@ namespace Starbelter.Combat
             Vector2 toEnemy = (enemy.transform.position - transform.position);
             float distance = toEnemy.magnitude;
 
+            // Get enemy controller once for reuse
+            var enemyController = enemy.GetComponent<UnitController>();
+
             // Check line of sight first
             var los = CombatUtils.CheckLineOfSight(transform.position, enemy.transform.position);
 
@@ -195,6 +204,16 @@ namespace Starbelter.Combat
             {
                 // Can't see through full cover
                 return;
+            }
+
+            // Half cover blocks perception if target is hiding (ducking or stealthed)
+            if (los.IsPartialCover)
+            {
+                if (enemyController != null && enemyController.IsHiding)
+                {
+                    return; // Target is hiding behind half cover - can't see them
+                }
+                // Target is standing/exposed - half cover doesn't hide them, continue with roll
             }
 
             // Distance penalty (further = harder to spot)
@@ -220,11 +239,12 @@ namespace Starbelter.Combat
                 movementModifier = 2;
             }
 
-            // Get stats
-            int perception = character?.Perception ?? 10;
+            // Get stats with state modifier
+            int basePerception = character?.Perception ?? 10;
+            float stateModifier = GetStatePerceptionModifier();
+            int perception = Mathf.RoundToInt(basePerception * stateModifier);
             int stealth = 10;
 
-            var enemyController = enemy.GetComponent<UnitController>();
             if (enemyController?.Character != null)
             {
                 stealth = enemyController.Character.Stealth;
@@ -342,31 +362,7 @@ namespace Starbelter.Combat
 
         #endregion
 
-        #region Threat Tracking (from ThreatManager)
-
-        private void RegisterDirectionalThreat(Vector2 direction, float amount)
-        {
-            int bucket = DirectionToBucket(direction);
-            threatBuckets[bucket] += amount;
-
-            if (threatBuckets[bucket] > maxThreatEver)
-            {
-                maxThreatEver = threatBuckets[bucket];
-            }
-        }
-
-        private void DecayThreats()
-        {
-            float decayAmount = (maxThreatEver / decayTime) * Time.deltaTime;
-
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                if (threatBuckets[i] > 0)
-                {
-                    threatBuckets[i] = Mathf.Max(0f, threatBuckets[i] - decayAmount);
-                }
-            }
-        }
+        #region Aimed Shot Tracking
 
         private void DecayAimedShotThreats()
         {
@@ -382,22 +378,9 @@ namespace Starbelter.Combat
             }
         }
 
-        private int DirectionToBucket(Vector2 direction)
-        {
-            float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
-            if (angle < 0) angle += 360f;
-            return Mathf.FloorToInt(angle / DEGREES_PER_BUCKET) % BUCKET_COUNT;
-        }
-
-        private Vector2 BucketToDirection(int bucket)
-        {
-            float angle = (bucket * DEGREES_PER_BUCKET + DEGREES_PER_BUCKET / 2f) * Mathf.Deg2Rad;
-            return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-        }
-
         #endregion
 
-        #region Public API - Threat Queries (ThreatManager compatibility)
+        #region Public API - Threat Queries
 
         /// <summary>
         /// Register that a specific enemy shot at us.
@@ -424,124 +407,10 @@ namespace Starbelter.Combat
             if (isAimedShot)
             {
                 contact.AimedShotThreat += 1f;
-                Debug.Log($"[{transform.root.name}] AIMED SHOT from {enemy.name} - threat now {contact.AimedShotThreat:F1} (IsSniper: {contact.IsSniper})");
             }
 
-            // Also register directional threat (aimed shots register more threat)
-            float threatAmount = damage > 0 ? damage : 5f;
-            if (isAimedShot) threatAmount *= 1.5f;
-            RegisterDirectionalThreat(contact.DirectionFromMe, threatAmount);
-        }
-
-        /// <summary>
-        /// Manually register a threat from a direction.
-        /// </summary>
-        public void RegisterThreat(Vector2 direction, float amount)
-        {
-            RegisterDirectionalThreat(direction, amount);
-        }
-
-        /// <summary>
-        /// Register threat from a visible enemy position.
-        /// </summary>
-        public void RegisterVisibleEnemy(Vector2 enemyPosition, float threatAmount = 1f)
-        {
-            Vector2 direction = (enemyPosition - (Vector2)transform.position).normalized;
-            RegisterDirectionalThreat(direction, threatAmount);
-        }
-
-        /// <summary>
-        /// Returns true if any threat bucket is above the threshold.
-        /// </summary>
-        public bool IsUnderFire(float threshold = 0.1f)
-        {
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                if (threatBuckets[i] > threshold)
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Gets the direction with the highest threat level.
-        /// </summary>
-        public Vector2? GetHighestThreatDirection()
-        {
-            int highestBucket = -1;
-            float highestThreat = 0f;
-
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                if (threatBuckets[i] > highestThreat)
-                {
-                    highestThreat = threatBuckets[i];
-                    highestBucket = i;
-                }
-            }
-
-            if (highestBucket < 0 || highestThreat <= 0.01f)
-            {
-                return null;
-            }
-
-            return BucketToDirection(highestBucket);
-        }
-
-        /// <summary>
-        /// Gets the total accumulated threat from all directions.
-        /// </summary>
-        public float GetTotalThreat()
-        {
-            float total = 0f;
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                total += threatBuckets[i];
-            }
-            return total;
-        }
-
-        /// <summary>
-        /// Gets all active threat directions above a threshold.
-        /// </summary>
-        public List<ThreatInfo> GetActiveThreats(float threshold = 0.1f)
-        {
-            var threats = new List<ThreatInfo>();
-
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                if (threatBuckets[i] > threshold)
-                {
-                    threats.Add(new ThreatInfo
-                    {
-                        Direction = BucketToDirection(i),
-                        ThreatLevel = threatBuckets[i],
-                        BucketIndex = i
-                    });
-                }
-            }
-
-            threats.Sort((a, b) => b.ThreatLevel.CompareTo(a.ThreatLevel));
-            return threats;
-        }
-
-        /// <summary>
-        /// Gets the threat level from a specific direction.
-        /// </summary>
-        public float GetThreatLevel(Vector2 direction)
-        {
-            int bucket = DirectionToBucket(direction);
-            return threatBuckets[bucket];
-        }
-
-        /// <summary>
-        /// Gets the raw threat level for a specific bucket index.
-        /// </summary>
-        public float GetThreatLevelByBucket(int bucketIndex)
-        {
-            if (bucketIndex < 0 || bucketIndex >= BUCKET_COUNT)
-                return 0f;
-            return threatBuckets[bucketIndex];
+            // Notify listeners that we're under fire
+            OnUnderFire?.Invoke(contact);
         }
 
         /// <summary>
@@ -596,30 +465,23 @@ namespace Starbelter.Combat
         }
 
         /// <summary>
-        /// Clears all threat and perception data.
+        /// Clears all perception data.
         /// </summary>
-        public void ClearThreats()
+        public void ClearPerceptionData()
         {
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                threatBuckets[i] = 0f;
-            }
             perceivedUnits.Clear();
         }
 
         /// <summary>
-        /// Reset threat levels to a minimum value (not zero).
+        /// Reset threat tracking on all contacts.
         /// </summary>
-        public void ResetThreats(float minimumValue = 0.01f)
+        public void ResetContactThreats()
         {
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                threatBuckets[i] = minimumValue;
-            }
             foreach (var contact in perceivedUnits.Values)
             {
                 contact.ShotsFiredAtMe = 0;
                 contact.TotalDamageDealt = 0f;
+                contact.AimedShotThreat = 0f;
             }
         }
 
@@ -751,22 +613,6 @@ namespace Starbelter.Combat
 
             if (!Application.isPlaying) return;
 
-            // Draw threat buckets
-            float maxDisplayRadius = 2f;
-            for (int i = 0; i < BUCKET_COUNT; i++)
-            {
-                if (threatBuckets[i] <= 0.01f) continue;
-
-                Vector2 dir = BucketToDirection(i);
-                float normalizedThreat = Mathf.Clamp01(threatBuckets[i] / Mathf.Max(maxThreatEver, 1f));
-
-                Gizmos.color = Color.Lerp(Color.green, Color.red, normalizedThreat);
-                float lineLength = normalizedThreat * maxDisplayRadius;
-                Vector3 endPoint = pos + new Vector3(dir.x, dir.y, 0) * lineLength;
-                Gizmos.DrawLine(pos, endPoint);
-                Gizmos.DrawWireSphere(endPoint, 0.1f);
-            }
-
             // Draw perceived enemies
             foreach (var contact in perceivedUnits.Values)
             {
@@ -851,16 +697,6 @@ namespace Starbelter.Combat
 
             return (distanceScore + shotScore + aimedShotScore + damageScore) * recencyMultiplier * awarenessMultiplier;
         }
-    }
-
-    /// <summary>
-    /// Directional threat information (kept for AI state compatibility).
-    /// </summary>
-    public struct ThreatInfo
-    {
-        public Vector2 Direction;
-        public float ThreatLevel;
-        public int BucketIndex;
     }
 
     #endregion
