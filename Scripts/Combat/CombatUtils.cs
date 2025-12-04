@@ -304,6 +304,7 @@ namespace Starbelter.Combat
                 int fullCoverCount = 0;
                 int halfCoverCount = 0;
                 int exposedCount = 0;
+                const float DEFAULT_ASSUMED_WEAPON_RANGE = 15f;
 
                 // Use all known enemies, checking if they can reach us
                 if (knownEnemies != null && knownEnemies.Count > 0)
@@ -342,6 +343,26 @@ namespace Starbelter.Combat
                             exposedCount++;
                     }
                 }
+                else if (enemies.Count > 0)
+                {
+                    // Fallback: knownEnemies empty but we know enemy positions
+                    // Use enemies list with assumed weapon range for basic cover scoring
+                    foreach (var enemyPos in enemies)
+                    {
+                        float distToEnemy = Vector2.Distance(candidatePos, enemyPos);
+                        if (distToEnemy > DEFAULT_ASSUMED_WEAPON_RANGE) continue;
+
+                        // Raycast FROM enemy TO our position
+                        var losFromEnemy = CheckLineOfSight(enemyPos, candidatePos);
+
+                        if (losFromEnemy.IsBlocked)
+                            fullCoverCount++;
+                        else if (losFromEnemy.IsPartialCover)
+                            halfCoverCount++;
+                        else
+                            exposedCount++;
+                    }
+                }
 
                 // Determine overall cover type for display (worst case)
                 CoverType ourCover = CoverType.None;
@@ -358,6 +379,13 @@ namespace Starbelter.Combat
                 // Full cover from enemy = +20, Half cover = +10, Exposed = -15
                 float coverScore = (fullCoverCount * 20f) + (halfCoverCount * 10f) - (exposedCount * 15f);
                 positionScore += coverScore;
+
+                // CRITICAL: Heavy penalty for completely exposed positions
+                // Being in the open is almost never acceptable
+                if (ourCover == CoverType.None && totalThreats > 0)
+                {
+                    positionScore -= 50f;
+                }
 
                 // Penalize high threat positions (don't walk into kill zones)
                 // Threat 10 = dangerous (-100), 20 = deadly (-200). Must outweigh offensive bonuses.

@@ -117,6 +117,14 @@ namespace Starbelter.Combat
             {
                 collider.isTrigger = true;
             }
+
+            // Set collider size to match perception range for projectile detection
+            if (collider is CircleCollider2D circleCollider)
+            {
+                circleCollider.radius = perceptionRange;
+            }
+
+            Debug.Log($"[{transform.parent?.name ?? name}] PerceptionManager initialized - Layer: {LayerMask.LayerToName(gameObject.layer)}, Collider: {collider.GetType().Name}, IsTrigger: {collider.isTrigger}, Radius: {(collider as CircleCollider2D)?.radius ?? 0}, Range: {perceptionRange}");
         }
 
         #endregion
@@ -145,19 +153,40 @@ namespace Starbelter.Combat
         /// </summary>
         private void OnTriggerEnter2D(Collider2D other)
         {
+            Debug.Log($"[{transform.parent?.name ?? name}] PerceptionManager.OnTriggerEnter2D - Collided with: {other.name}, Layer: {LayerMask.LayerToName(other.gameObject.layer)}");
+
             var projectile = other.GetComponent<Projectile>();
-            if (projectile == null) return;
+            if (projectile == null)
+            {
+                Debug.Log($"[{transform.parent?.name ?? name}] Not a projectile, ignoring");
+                return;
+            }
+
+            Debug.Log($"[{transform.parent?.name ?? name}] Projectile detected! SourceTeam={projectile.SourceTeam}, MyTeam={myTeam}, SourceUnit={projectile.SourceUnit?.name ?? "null"}");
 
             // Ignore friendly fire
-            if (projectile.SourceTeam == myTeam) return;
+            if (projectile.SourceTeam == myTeam)
+            {
+                Debug.Log($"[{transform.parent?.name ?? name}] Friendly projectile, ignoring");
+                return;
+            }
 
             // Ignore neutral projectiles
-            if (projectile.SourceTeam == Team.Neutral) return;
+            if (projectile.SourceTeam == Team.Neutral)
+            {
+                Debug.Log($"[{transform.parent?.name ?? name}] Neutral projectile, ignoring");
+                return;
+            }
 
             // Track who shot at us - instant Confirmed awareness
             if (projectile.SourceUnit != null)
             {
+                Debug.Log($"[{transform.parent?.name ?? name}] UNDER FIRE from {projectile.SourceUnit.name}!");
                 RegisterEnemyShot(projectile.SourceUnit, projectile.Damage, projectile.IsAimedShot);
+            }
+            else
+            {
+                Debug.Log($"[{transform.parent?.name ?? name}] Projectile has no SourceUnit, cannot register shooter");
             }
         }
 

@@ -99,16 +99,57 @@ namespace Starbelter.AI
         /// <summary>
         /// Called when a unit spots an enemy for the first time.
         /// If squad hasn't been engaged yet, the spotter calls out FIRST_CONTACT.
+        /// Also shares intel with all other squad members so they can react.
         /// </summary>
         public void AlertSquadContact(UnitController spotter, Vector3 enemyPosition)
         {
-            if (hasBeenEngaged) return;
-
+            bool wasFirstContact = !hasBeenEngaged;
             hasBeenEngaged = true;
-            spotter.ShowRadioMessageDelayed("FIRST_CONTACT");
 
-            // TODO: Alert other squad members about threat direction
-            Debug.Log($"[{name}] FIRST CONTACT! Spotted by {spotter.name} at {enemyPosition}");
+            if (wasFirstContact)
+            {
+                spotter.ShowRadioMessageDelayed("FIRST_CONTACT");
+            }
+
+            Debug.Log($"[{name}] CONTACT! Spotted by {spotter.name} at {enemyPosition}");
+
+            // Share intel with ALL squad members (including spotter, for consistency)
+            ShareIntelWithSquad(spotter, enemyPosition);
+        }
+
+        /// <summary>
+        /// Share perceived enemy intel with all squad members.
+        /// This makes other units aware of threats they can't personally see.
+        /// </summary>
+        private void ShareIntelWithSquad(UnitController spotter, Vector3 enemyPosition)
+        {
+            // Get spotter's perceived enemies to share
+            var spotterPerception = spotter.PerceptionManager;
+            if (spotterPerception == null) return;
+
+            var perceivedEnemies = spotterPerception.GetPerceivedEnemies();
+            if (perceivedEnemies.Count == 0) return;
+
+            foreach (var member in members)
+            {
+                if (member == null || member.IsDead) continue;
+                if (member == spotter) continue; // Don't send intel back to spotter
+                if (member.PerceptionManager == null) continue;
+
+                // Share all perceived enemies from spotter
+                foreach (var enemy in perceivedEnemies)
+                {
+                    member.PerceptionManager.ReceiveSquadIntel(enemy);
+                }
+
+                Debug.Log($"[{name}] Shared intel with {member.name} - {perceivedEnemies.Count} contacts");
+
+                // If member is in Ready state and doesn't have a target, prompt them to find a fighting position
+                if (member.CurrentStateType == UnitStateType.Ready && member.CurrentTarget == null)
+                {
+                    member.RequestFightingPosition();
+                }
+            }
         }
 
         /// <summary>

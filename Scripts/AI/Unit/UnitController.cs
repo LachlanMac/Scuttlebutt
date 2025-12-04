@@ -104,6 +104,7 @@ namespace Starbelter.AI
 
         // === DUCKED STATE ===
         private bool isDucked;
+        private Vector3 normalScale;
 
         // === ITargetable ===
         public Vector3 Position => transform.position;
@@ -138,10 +139,11 @@ namespace Starbelter.AI
         public bool IsStealthed => isStealthed;
 
         /// <summary>
-        /// Returns true if unit is actively hiding (ducking behind cover OR in stealth mode).
+        /// Returns true if unit is in stealth mode (not yet spotted).
         /// Hidden units behind half cover cannot be perceived.
+        /// Once engaged, a unit cannot hide again - suppression doesn't make you invisible.
         /// </summary>
-        public bool IsHiding => isStealthed || currentStateType == UnitStateType.Pinned;
+        public bool IsHiding => isStealthed;
 
         public bool IsInCover
         {
@@ -209,6 +211,11 @@ namespace Starbelter.AI
         public void SetDucked(bool ducked)
         {
             isDucked = ducked;
+
+            // Visual indicator - shrink Y axis when ducked
+            transform.localScale = ducked
+                ? new Vector3(normalScale.x, normalScale.y * 0.7f, normalScale.z)
+                : normalScale;
         }
 
         // === RELOAD ===
@@ -272,6 +279,7 @@ namespace Starbelter.AI
             movement = GetComponent<UnitMovement>();
             unitHealth = GetComponentInChildren<UnitHealth>();
             perceptionManager = GetComponentInChildren<PerceptionManager>();
+            normalScale = transform.localScale;
 
             if (perceptionManager != null)
             {
@@ -346,8 +354,8 @@ namespace Starbelter.AI
             float threat = GetThreatAtPosition(transform.position);
             float oldSuppression = suppression;
 
-            // Suppression GAIN from threat
-            if (threat > 0)
+            // Suppression GAIN only from dangerous+ threat
+            if (threat >= THREAT_DANGEROUS)
             {
                 // At threat 10 (dangerous), gain ~10 suppression/sec
                 // At threat 20 (deadly), gain ~20 suppression/sec
@@ -587,7 +595,7 @@ namespace Starbelter.AI
                 return;
             }
 
-            // If we found a target from this position, set it
+            // Set target FIRST so score comparison includes cover/LOS bonuses
             if (result.BestTarget != null)
             {
                 var targetable = result.BestTarget.GetComponent<ITargetable>();
@@ -595,6 +603,26 @@ namespace Starbelter.AI
                 {
                     SetTarget(targetable);
                 }
+            }
+
+            // Compare position scores - only move if new position is significantly better
+            float currentScore = ScorePosition(transform.position);
+            float newScore = ScorePosition(result.Position);
+
+            // Use the async result's score if our local scoring doesn't show improvement
+            // The async scoring is more comprehensive (considers all enemies, path costs, etc.)
+            float asyncScore = result.Score;
+
+            Debug.Log($"[{name}] Position comparison: current={currentScore:F1}, new={newScore:F1}, asyncScore={asyncScore:F1}");
+
+            // Move if EITHER our local scoring shows improvement OR the async score is good (>50)
+            // This prevents the "staying put" bug when we can't see the target from current position
+            if (newScore <= currentScore && asyncScore < 50f)
+            {
+                Debug.Log($"[{name}] New position not better - staying put");
+                hasPendingFightingPositionRequest = false;
+                hasPendingDestination = false;
+                return;
             }
 
             pendingDestination = result.Position;
@@ -771,22 +799,34 @@ namespace Starbelter.AI
                 if (targetable.Team == team || targetable.Team == Team.Neutral) continue;
                 if (targetable.IsDead) continue;
 
+                float dist = Vector3.Distance(transform.position, targetable.Position);
+                bool hasLOS = HasLineOfSight(transform.position, targetable.Position);
+
                 // Ducked targets behind half cover are treated as having full cover (not visible)
                 if (targetable.IsDucked && coverQuery != null)
                 {
                     var coverCheck = coverQuery.CheckCoverAt(targetable.Position, transform.position);
                     if (coverCheck.HasCover && coverCheck.Type == CoverType.Half)
                     {
+                        Debug.Log($"[{name}] Can't see {mb.name} - DUCKED behind half cover (dist={dist:F1}, range={maxRange:F1})");
                         continue; // Target is ducked behind half cover - can't see them
                     }
                 }
 
-                float dist = Vector3.Distance(transform.position, targetable.Position);
-                if (dist < closestDist && HasLineOfSight(transform.position, targetable.Position))
+                if (dist >= closestDist)
                 {
-                    closestDist = dist;
-                    closest = targetable;
+                    // Not closer than current best
+                    continue;
                 }
+
+                if (!hasLOS)
+                {
+                    Debug.Log($"[{name}] Can't see {mb.name} - NO LOS (dist={dist:F1}, range={maxRange:F1})");
+                    continue;
+                }
+
+                closestDist = dist;
+                closest = targetable;
             }
 
             return closest;
@@ -864,6 +904,12 @@ namespace Starbelter.AI
         {
             string shooterName = shooter.Unit != null ? shooter.Unit.name : "unknown";
 
+            // ALWAYS alert squad when under fire - even if we personally can't react
+            if (squad != null && shooter.Unit != null)
+            {
+                squad.AlertSquadContact(this, shooter.Unit.transform.position);
+            }
+
             // Don't react if we're already moving or have a pending destination
             if (movement.IsMoving || hasPendingDestination || hasPendingFightingPositionRequest)
             {
@@ -876,6 +922,21 @@ namespace Starbelter.AI
             {
                 Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - SKIPPED (pinned)");
                 return;
+            }
+
+            // Don't react if already in cover from the shooter
+            if (shooter.Unit != null)
+            {
+                var coverQuery = CoverQuery.Instance;
+                if (coverQuery != null)
+                {
+                    var coverCheck = coverQuery.CheckCoverAt(transform.position, shooter.Unit.transform.position);
+                    if (coverCheck.HasCover)
+                    {
+                        Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - SKIPPED (already in cover)");
+                        return;
+                    }
+                }
             }
 
             Debug.Log($"[{gameObject.name}] OnUnderFire from {shooterName} - requesting new position");

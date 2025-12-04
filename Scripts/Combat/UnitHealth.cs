@@ -10,13 +10,6 @@ namespace Starbelter.Combat
     /// </summary>
     public class UnitHealth : MonoBehaviour
     {
-        [Header("Cover Dodge Chances")]
-        [Tooltip("Dodge chance when in cover and not peeking")]
-        [SerializeField] private float inCoverDodgeChance = 0.8f;
-
-        [Tooltip("Dodge chance when in cover but peeking")]
-        [SerializeField] private float peekingDodgeChance = 0.2f;
-
         [Header("Effects")]
         [SerializeField] private GameObject hitEffectPrefab;
         [SerializeField] private GameObject dodgeEffectPrefab;
@@ -78,12 +71,23 @@ namespace Starbelter.Combat
             // Check if projectile actually crossed cover (raycast validation)
             bool hasCoverFromShot = CheckCoverFromProjectile(projectileOrigin);
 
+            // Determine state for logging
+            bool isDucking = unitController != null && unitController.IsDucked;
+            bool isMoving = unitController != null && unitController.Movement != null && unitController.Movement.IsMoving;
+            string state = isDucking ? "DUCKING" : (isMoving ? "MOVING" : "STANDING");
+
             // Calculate dodge chance based on actual cover from this shot
             // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
             float dodgeChance = CalculateDodgeChance(hasCoverFromShot, isAimedShot);
 
             // Roll for dodge
-            if (Random.value < dodgeChance)
+            float roll = Random.value;
+            bool dodged = roll < dodgeChance;
+
+            string unitName = unitController != null ? unitController.name : gameObject.name;
+            Debug.Log($"[{unitName}] Dodge attempt: State={state}, Cover={hasCoverFromShot}, Aimed={isAimedShot}, Chance={dodgeChance:P0}, Roll={roll:F2} -> {(dodged ? "DODGE" : "HIT")}");
+
+            if (dodged)
             {
                 OnDodged();
                 return false;
@@ -203,27 +207,42 @@ namespace Starbelter.Combat
         }
 
         /// <summary>
-        /// Calculate dodge chance based on whether projectile crossed cover.
+        /// Calculate dodge chance based on whether projectile crossed cover and unit's movement state.
+        /// Cover dodge chances (when bullet crossed cover):
+        ///   - Ducking: 95% (very safe - hard to hit someone fully behind cover)
+        ///   - Standing in place: 40% (moderate protection)
+        ///   - Moving: 20% (dangerous - running through fire)
         /// Aimed shots halve the cover dodge bonus (careful aim finds gaps).
         /// </summary>
         private float CalculateDodgeChance(bool hasCoverFromShot, bool isAimedShot = false)
         {
             if (unitController == null) return 0f;
 
-            bool isPeeking = unitController.IsPeeking;
-
             float coverDodge = 0f;
 
             // Only get cover bonus if projectile actually crossed cover
-            if (hasCoverFromShot && !isPeeking)
+            if (hasCoverFromShot)
             {
-                coverDodge = inCoverDodgeChance;
+                bool isDucking = unitController.IsDucked;
+                bool isMoving = unitController.Movement != null && unitController.Movement.IsMoving;
+
+                if (isDucking)
+                {
+                    // Ducking behind cover - very safe (95%)
+                    coverDodge = 0.95f;
+                }
+                else if (isMoving)
+                {
+                    // Moving through cover - dangerous (20%)
+                    coverDodge = 0.20f;
+                }
+                else
+                {
+                    // Standing/peeking in cover - moderate protection (40%)
+                    coverDodge = 0.40f;
+                }
             }
-            else if (hasCoverFromShot && isPeeking)
-            {
-                coverDodge = peekingDodgeChance;
-            }
-            // No cover crossed = no cover dodge bonus
+            // No cover crossed = no cover dodge bonus (0%)
 
             // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
             if (isAimedShot)
@@ -237,7 +256,7 @@ namespace Starbelter.Combat
             if (unitController.Character != null)
             {
                 float reflexMod = Character.StatToModifier(unitController.Character.Reflex);
-                baseDodge += reflexMod * 0.2f; // Reflex can add/subtract up to 10% dodge
+                baseDodge += reflexMod * 0.05f; // Reflex adds smaller bonus now (up to ~2.5%)
             }
 
             return Mathf.Clamp01(baseDodge);

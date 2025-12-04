@@ -136,7 +136,7 @@ namespace Starbelter.Core
             Projectile projectile = projectileObj.GetComponent<Projectile>();
             if (projectile != null)
             {
-                projectile.Fire(direction, team);
+                projectile.Fire(direction, team, gameObject);
             }
             else
             {

@@ -19,6 +19,12 @@ namespace Starbelter.AI
             base.Enter();
             lastScanTime = 0f;
             lastDangerCheckTime = 0f;
+
+            // Debug: why are we entering Ready?
+            float suppression = controller.Suppression;
+            float threat = controller.GetThreatAtPosition(controller.transform.position);
+            var enemy = controller.FindClosestVisibleEnemy(controller.PerceptionRange);
+            Debug.Log($"[{controller.name}] Entering READY - Suppression={suppression:F0}, Threat={threat:F1}, VisibleEnemy={enemy != null}");
         }
 
         public override void Update()
@@ -66,7 +72,17 @@ namespace Starbelter.AI
 
                 controller.SetTarget(enemy);
 
-                // Check if we can engage from here or need to advance
+                // CRITICAL: If not in cover, find a fighting position first!
+                // Don't just stand in the open and start shooting
+                if (!controller.IsInCover)
+                {
+                    controller.RequestFightingPosition();
+                    // Enter combat - async callback will trigger Moving if position found
+                    controller.ChangeState(UnitStateType.Combat);
+                    return;
+                }
+
+                // We're in cover - check if we can engage from here or need to advance
                 float distance = Vector3.Distance(Position, enemy.Position);
                 if (distance <= controller.WeaponRange)
                 {
