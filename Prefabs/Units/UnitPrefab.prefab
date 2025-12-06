@@ -225,7 +225,7 @@ SpriteRenderer:
   m_SortingLayerID: 1933297545
   m_SortingLayer: 3
   m_SortingOrder: 0
-  m_Sprite: {fileID: 5103877950306322871, guid: e7219866586695a4b95e24c183edaf02, type: 3}
+  m_Sprite: {fileID: 6246832655069406539, guid: a3e656a1cbee10d4e8bb2bb10d4b0a9a, type: 3}
   m_Color: {r: 0, g: 0.34792766, b: 0.8679245, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -267,8 +267,12 @@ MonoBehaviour:
     Perception: 10
     Stealth: 10
     Tactics: 10
+    Leadership: 10
     MaxHealth: 0
     CurrentHealth: 0
+    MaxMorale: 100
+    CurrentMorale: 100
+    HasAppliedLowHealthMoralePenalty: 0
     PhysicalMitigation: 0
     HeatMitigation: 0
     EnergyMitigation: 0
@@ -318,7 +322,7 @@ BoxCollider2D:
   m_SpriteTilingProperty:
     border: {x: 0, y: 0, z: 0, w: 0}
     pivot: {x: 0.5, y: 0.5}
-    oldSize: {x: 0.45, y: 0.62}
+    oldSize: {x: 0.37, y: 0.48}
     newSize: {x: 0.2, y: 0.2}
     adaptiveTilingThreshold: 0.5
     drawMode: 0
@@ -696,8 +700,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f463ac7feb770404e9b97ac26c71524e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Combat.UnitHealth
-  inCoverDodgeChance: 0.7
-  peekingDodgeChance: 0.2
   hitEffectPrefab: {fileID: 0}
   dodgeEffectPrefab: {fileID: 0}
   deathEffectPrefab: {fileID: 0}

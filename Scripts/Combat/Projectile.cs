@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Text;
 using Starbelter.Core;
 using Starbelter.Pathfinding;
 using Starbelter.AI;
@@ -34,10 +35,18 @@ namespace Starbelter.Combat
         private Vector2 direction;
         private Vector2 origin;
         private GameObject sourceUnit;
-        private bool isAimedShot;
+        private float coverPenetration = 1.0f;  // 1.0 = normal, <1.0 = penetrates cover, >1.0 = cover more effective
 
         // Tile threat tracking
         private Vector3 lastPosition;
+
+        // Shot report tracking
+        private ShotType shotType = ShotType.Snap;
+        private float accuracy = 0.7f;
+        private StringBuilder coverReport = new StringBuilder();
+        private string finalResult = "EXPIRED";
+        private string targetName = "";
+        private bool reportLogged = false;
 
         public float Damage => damage;
         public DamageType DamageType => damageType;
@@ -45,7 +54,7 @@ namespace Starbelter.Combat
         public Vector2 Direction => direction;
         public Vector2 Origin => origin;
         public GameObject SourceUnit => sourceUnit;
-        public bool IsAimedShot => isAimedShot;
+        public float CoverPenetration => coverPenetration;
 
         private void Awake()
         {
@@ -107,9 +116,6 @@ namespace Starbelter.Combat
             // Rotate so sprite's "up" faces the fire direction
             float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f;
             transform.rotation = Quaternion.Euler(0, 0, angle);
-
-            var collider = GetComponent<Collider2D>();
-            Debug.Log($"[Projectile] Fired - Layer: {LayerMask.LayerToName(gameObject.layer)}, Collider: {collider?.GetType().Name ?? "null"}, IsTrigger: {collider?.isTrigger}, Team: {team}, Source: {source?.name ?? "null"}");
         }
 
         /// <summary>
@@ -122,12 +128,61 @@ namespace Starbelter.Combat
         }
 
         /// <summary>
-        /// Mark this projectile as an aimed shot (from extended aim).
-        /// Aimed shots halve the target's cover dodge bonus.
+        /// Set the cover penetration for this projectile.
+        /// Values less than 1.0 penetrate cover better (aimed shots).
+        /// Values greater than 1.0 are worse against cover (suppression, burst).
         /// </summary>
-        public void SetAimedShot(bool aimed)
+        public void SetCoverPenetration(float penetration)
         {
-            isAimedShot = aimed;
+            coverPenetration = penetration;
+        }
+
+        /// <summary>
+        /// Set shot info for the consolidated report.
+        /// </summary>
+        public void SetShotInfo(ShotType type, float acc)
+        {
+            shotType = type;
+            accuracy = acc;
+        }
+
+        /// <summary>
+        /// Record a cover encounter for the report.
+        /// </summary>
+        public void RecordCoverEncounter(string coverName, bool blocked, float blockChance)
+        {
+            if (coverReport.Length > 0) coverReport.Append(", ");
+            coverReport.Append($"{coverName}({blockChance:P0}->{(blocked ? "BLOCKED" : "passed")})");
+        }
+
+        /// <summary>
+        /// Record the final result (hit, dodged, blocked, etc.)
+        /// </summary>
+        public void RecordResult(string result, string target = "")
+        {
+            finalResult = result;
+            if (!string.IsNullOrEmpty(target)) targetName = target;
+        }
+
+        private void OnDestroy()
+        {
+            LogShotReport();
+        }
+
+        /// <summary>
+        /// Log consolidated shot report.
+        /// Format: [SHOT] Shooter -> Target | TYPE (acc%) | Cover: info | RESULT
+        /// </summary>
+        private void LogShotReport()
+        {
+            if (reportLogged) return;
+            reportLogged = true;
+
+            string shooterName = sourceUnit != null ? sourceUnit.name : "Unknown";
+            string targetDisplay = string.IsNullOrEmpty(targetName) ? "?" : targetName;
+            string coverInfo = coverReport.Length > 0 ? coverReport.ToString() : "none";
+
+            Debug.Log($"[SHOT] {shooterName} -> {targetDisplay} | {shotType} ({accuracy:P0} acc, {coverPenetration:F2} pen) | Cover: {coverInfo} | {finalResult}");
         }
 
         private void OnTriggerEnter2D(Collider2D other)
@@ -143,15 +198,15 @@ namespace Starbelter.Combat
             if (structure != null)
             {
                 // Cover only matters if an enemy is using it (standing near it)
-                // This handles: shooter's own cover, no-man's-land cover, and defender's cover
                 if (!IsEnemyNearCover(structure.transform.position))
                 {
-                    return; // No enemy using this cover - pass through
+                    return; // No enemy using this cover - pass through silently
                 }
 
                 // Enemy is using this cover - let structure decide if it blocks
                 if (structure.TryBlockProjectile(this))
                 {
+                    RecordResult("BLOCKED BY COVER");
                     if (hitEffectPrefab != null)
                     {
                         Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
@@ -172,24 +227,33 @@ namespace Starbelter.Combat
                     return; // Ignore same-team hits (no friendly fire)
                 }
 
-                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction, sourceUnit, isAimedShot);
+                // Record target name
+                string hitTargetName = other.transform.parent?.name ?? other.name;
+                targetName = hitTargetName;
+
+                bool wasHit = unitHealth.TryApplyDamage(damage, damageType, origin, direction, sourceUnit, coverPenetration);
 
                 if (wasHit)
                 {
-                    // Hit confirmed - spawn effect and destroy projectile
+                    RecordResult($"HIT ({damage:F0} dmg)", hitTargetName);
                     if (hitEffectPrefab != null)
                     {
                         Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
                     }
                     Destroy(gameObject);
                 }
-                // If dodged, projectile continues through (UnitHealth spawns dodge effect)
+                else
+                {
+                    RecordResult("DODGED", hitTargetName);
+                    // Projectile continues through
+                }
                 return;
             }
 
             // Handle hit logic for other objects
             if (!other.isTrigger)
             {
+                RecordResult("HIT OBSTACLE");
                 OnHit(other);
             }
         }

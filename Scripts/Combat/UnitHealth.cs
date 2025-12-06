@@ -64,28 +64,20 @@ namespace Starbelter.Combat
         /// Called when a projectile hits this unit.
         /// Returns true if damage was applied, false if dodged.
         /// </summary>
-        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection, GameObject attacker = null, bool isAimedShot = false)
+        /// <param name="coverPenetration">How well this shot penetrates cover. 1.0 = normal, less than 1.0 = penetrates better, greater than 1.0 = cover more effective</param>
+        public bool TryApplyDamage(float damage, DamageType damageType, Vector2 projectileOrigin, Vector2 projectileDirection, GameObject attacker = null, float coverPenetration = 1.0f)
         {
             if (IsDead) return false;
 
             // Check if projectile actually crossed cover (raycast validation)
             bool hasCoverFromShot = CheckCoverFromProjectile(projectileOrigin);
 
-            // Determine state for logging
-            bool isDucking = unitController != null && unitController.IsDucked;
-            bool isMoving = unitController != null && unitController.Movement != null && unitController.Movement.IsMoving;
-            string state = isDucking ? "DUCKING" : (isMoving ? "MOVING" : "STANDING");
-
             // Calculate dodge chance based on actual cover from this shot
-            // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
-            float dodgeChance = CalculateDodgeChance(hasCoverFromShot, isAimedShot);
+            float dodgeChance = CalculateDodgeChance(hasCoverFromShot, coverPenetration);
 
             // Roll for dodge
             float roll = Random.value;
             bool dodged = roll < dodgeChance;
-
-            string unitName = unitController != null ? unitController.name : gameObject.name;
-            Debug.Log($"[{unitName}] Dodge attempt: State={state}, Cover={hasCoverFromShot}, Aimed={isAimedShot}, Chance={dodgeChance:P0}, Roll={roll:F2} -> {(dodged ? "DODGE" : "HIT")}");
 
             if (dodged)
             {
@@ -104,7 +96,7 @@ namespace Starbelter.Combat
             // PerceptionManager handles both threat tracking and awareness
             if (attacker != null && unitController != null && unitController.PerceptionManager != null)
             {
-                unitController.PerceptionManager.RegisterEnemyShot(attacker, damage, isAimedShot);
+                unitController.PerceptionManager.RegisterEnemyShot(attacker, damage);
             }
 
             // Apply damage with mitigation
@@ -154,7 +146,21 @@ namespace Starbelter.Combat
         {
             if (character == null || IsDead) return;
 
+            // Track HP before damage for threshold check
+            float hpBefore = character.HealthPercent;
+
             float finalDamage = character.TakeDamage(damage, damageType);
+
+            // Morale penalty for taking damage
+            character.TakeMoraleDamage(10f);
+
+            // Check for crossing 50% HP threshold (one-time penalty)
+            if (hpBefore >= 0.5f && character.HealthPercent < 0.5f && !character.HasAppliedLowHealthMoralePenalty)
+            {
+                character.HasAppliedLowHealthMoralePenalty = true;
+                character.TakeMoraleDamage(30f);
+                Debug.Log($"[{unitController?.name ?? name}] Crossed 50% HP - morale -30. Now: {character.CurrentMorale:F0}");
+            }
 
             // Spawn hit effect
             if (hitEffectPrefab != null)
@@ -178,7 +184,21 @@ namespace Starbelter.Combat
         {
             if (character == null || IsDead) return;
 
+            // Track HP before damage for threshold check
+            float hpBefore = character.HealthPercent;
+
             float finalDamage = character.TakeDamage(damage);
+
+            // Morale penalty for taking damage
+            character.TakeMoraleDamage(10f);
+
+            // Check for crossing 50% HP threshold (one-time penalty)
+            if (hpBefore >= 0.5f && character.HealthPercent < 0.5f && !character.HasAppliedLowHealthMoralePenalty)
+            {
+                character.HasAppliedLowHealthMoralePenalty = true;
+                character.TakeMoraleDamage(30f);
+                Debug.Log($"[{unitController?.name ?? name}] Crossed 50% HP - morale -30. Now: {character.CurrentMorale:F0}");
+            }
 
             // Spawn hit effect
             if (hitEffectPrefab != null)
@@ -212,9 +232,11 @@ namespace Starbelter.Combat
         ///   - Ducking: 95% (very safe - hard to hit someone fully behind cover)
         ///   - Standing in place: 40% (moderate protection)
         ///   - Moving: 20% (dangerous - running through fire)
-        /// Aimed shots halve the cover dodge bonus (careful aim finds gaps).
+        /// Cover penetration modifies the cover bonus:
+        ///   - Less than 1.0 = penetrates cover (aimed shots)
+        ///   - Greater than 1.0 = cover more effective (suppression/burst)
         /// </summary>
-        private float CalculateDodgeChance(bool hasCoverFromShot, bool isAimedShot = false)
+        private float CalculateDodgeChance(bool hasCoverFromShot, float coverPenetration = 1.0f)
         {
             if (unitController == null) return 0f;
 
@@ -244,11 +266,10 @@ namespace Starbelter.Combat
             }
             // No cover crossed = no cover dodge bonus (0%)
 
-            // Aimed shots halve the cover bonus (careful aim finds gaps in cover)
-            if (isAimedShot)
-            {
-                coverDodge *= 0.5f;
-            }
+            // Apply cover penetration modifier
+            // coverPenetration < 1.0 = better at hitting through cover (aimed shots)
+            // coverPenetration > 1.0 = worse at hitting through cover (suppression/burst)
+            coverDodge *= coverPenetration;
 
             float baseDodge = coverDodge;
 
@@ -285,6 +306,12 @@ namespace Starbelter.Combat
             }
 
             OnDeath?.Invoke();
+
+            // Notify squad for morale penalty (leader death = 2x)
+            if (unitController != null && unitController.Squad != null)
+            {
+                unitController.Squad.OnAllyDeath(unitController);
+            }
 
             // Find the root unit transform
             Transform rootTransform = transform;

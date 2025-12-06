@@ -15,7 +15,7 @@ namespace Starbelter.AI
         Ready,      // No threats, holding position, high alertness
         Combat,     // Engaged with enemy, shooting
         Moving,     // Relocating to new position
-        Pinned,     // Suppressed, can't act (ducking)
+        Pinned,     // Under heavy threat, ducking behind cover
         Reloading   // Reloading weapon, vulnerable
     }
 
@@ -29,12 +29,10 @@ namespace Starbelter.AI
         // === CONSTANTS ===
         private const float THREAT_DANGEROUS = 10f;
         private const float THREAT_DEADLY = 20f;
-        private const float SUPPRESSION_PIN_THRESHOLD = 80f;
-
-        // Suppression decay rates based on threat level
-        private const float SUPPRESSION_DECAY_HIGH_THREAT = 2f;    // Under heavy fire - slow recovery
-        private const float SUPPRESSION_DECAY_MED_THREAT = 8f;     // Some fire - moderate recovery
-        private const float SUPPRESSION_DECAY_LOW_THREAT = 20f;    // Light/no fire - fast recovery
+        private const float THREAT_PIN_THRESHOLD = 20f;      // Threat level that triggers Pinned state
+        private const float THREAT_UNPIN_THRESHOLD = 15f;    // Threat must drop below this to exit Pinned
+        private const float THREAT_SEVERE = 30f;             // Too hot to peek while pinned
+        private const float THREAT_PANIC = 40f;              // Panic threshold (modified by bravery)
         private const float EVALUATION_INTERVAL = 0.5f;
         private const float MIN_STATE_TIME = 1f;
         private const float COVER_SEARCH_RADIUS = 15f;
@@ -94,13 +92,15 @@ namespace Starbelter.AI
 
         // === COMBAT ===
         private float lastFireTime;
-        private float suppression;
 
         // === LIFECYCLE ===
         private bool isDestroyed;
 
         // === STEALTH ===
         private bool isStealthed;
+
+        // === ARENA ===
+        private Arena.Arena currentArena;
 
         // === DUCKED STATE ===
         private bool isDucked;
@@ -127,11 +127,15 @@ namespace Starbelter.AI
         public float PerceptionRange => perceptionManager != null ? perceptionManager.PerceptionRange : weaponRange * 1.5f;
         public Posture Posture => posture;
         public Posture BasePosture => posture;
+        public Arena.Arena CurrentArena => currentArena;
 
         public Vector3 FirePosition => firePoint != null ? firePoint.position : transform.position;
         public ITargetable CurrentTarget => currentTarget;
-        public float Suppression => suppression;
-        public bool IsSuppressed => suppression >= SUPPRESSION_PIN_THRESHOLD * 0.5f;
+        public float ThreatPinThreshold => THREAT_PIN_THRESHOLD;
+        public float ThreatUnpinThreshold => THREAT_UNPIN_THRESHOLD;
+        public float ThreatSevere => THREAT_SEVERE;
+        public float ThreatPanic => THREAT_PANIC;
+        public bool IsPinned => GetThreatAtPosition(transform.position) >= THREAT_PIN_THRESHOLD;
         public bool HasPendingDestination => hasPendingDestination;
         public bool ShouldUseThreatAwarePath => useThreatAwarePath;
         public bool CanShoot => Time.time - lastFireTime >= 1f / fireRate && !NeedsReload;
@@ -141,7 +145,7 @@ namespace Starbelter.AI
         /// <summary>
         /// Returns true if unit is in stealth mode (not yet spotted).
         /// Hidden units behind half cover cannot be perceived.
-        /// Once engaged, a unit cannot hide again - suppression doesn't make you invisible.
+        /// Once engaged, a unit cannot hide again - being pinned doesn't make you invisible.
         /// </summary>
         public bool IsHiding => isStealthed;
 
@@ -350,44 +354,6 @@ namespace Starbelter.AI
             if (isDestroyed) return;
             if (IsDead) return;
 
-            // Threat-based suppression: standing in dangerous areas builds suppression
-            float threat = GetThreatAtPosition(transform.position);
-            float oldSuppression = suppression;
-
-            // Suppression GAIN only from dangerous+ threat
-            if (threat >= THREAT_DANGEROUS)
-            {
-                // At threat 10 (dangerous), gain ~10 suppression/sec
-                // At threat 20 (deadly), gain ~20 suppression/sec
-                float suppressionGain = threat * Time.deltaTime;
-                suppression += suppressionGain;
-            }
-
-            // Suppression DECAY - always happens, but rate depends on threat level
-            // High threat = slow decay, Low/no threat = fast decay
-            float decayRate;
-            if (threat >= THREAT_DEADLY)
-            {
-                decayRate = SUPPRESSION_DECAY_HIGH_THREAT;  // 2/sec - barely recovering
-            }
-            else if (threat >= THREAT_DANGEROUS)
-            {
-                decayRate = SUPPRESSION_DECAY_MED_THREAT;   // 8/sec - moderate recovery
-            }
-            else
-            {
-                decayRate = SUPPRESSION_DECAY_LOW_THREAT;   // 20/sec - fast recovery
-            }
-
-            suppression -= decayRate * Time.deltaTime;
-            suppression = Mathf.Clamp(suppression, 0f, 100f);
-
-            // Log when crossing thresholds
-            if (oldSuppression < 40f && suppression >= 40f)
-                Debug.Log($"[{gameObject.name}] Suppression rising: {suppression:F0} (threat={threat:F1})");
-            if (oldSuppression < SUPPRESSION_PIN_THRESHOLD && suppression >= SUPPRESSION_PIN_THRESHOLD)
-                Debug.Log($"[{gameObject.name}] PINNED! Suppression={suppression:F0} (threat={threat:F1})");
-
             // Update current state
             currentState?.Update();
         }
@@ -408,7 +374,55 @@ namespace Starbelter.AI
             currentState.Enter();
             stateEnterTime = Time.time;
 
-            Debug.Log($"[{name}] {oldState} -> {newState}");
+            Debug.Log($"[{name}] {oldState} -> {newState} | {GetStatusInfo()}");
+        }
+
+        /// <summary>
+        /// Get a formatted status string for debugging.
+        /// Shows health, morale, threat, position, target, cover status.
+        /// </summary>
+        public string GetStatusInfo()
+        {
+            float hp = character?.HealthPercent * 100f ?? 0f;
+            float morale = GetEffectiveMorale();
+            float baseMorale = character?.CurrentMorale ?? 0f;
+            float threat = GetThreatAtPosition(transform.position);
+            float perceivedThreat = GetPerceivedThreat();
+
+            string targetName = currentTarget != null ? currentTarget.Transform.name : "none";
+            string coverStatus = GetCoverStatus();
+            string ducked = IsDucked ? " [DUCKED]" : "";
+
+            Vector3Int tile = Vector3Int.FloorToInt(transform.position);
+
+            return $"HP={hp:F0}% Morale={morale:F0}({baseMorale:F0}) Threat={threat:F1}(perceived:{perceivedThreat:F1}) Tile={tile.x},{tile.y} Target={targetName} Cover={coverStatus}{ducked}";
+        }
+
+        /// <summary>
+        /// Get cover status as a string (None, Half, Full).
+        /// </summary>
+        private string GetCoverStatus()
+        {
+            var coverQuery = CoverQuery.Instance;
+            if (coverQuery == null) return "None";
+
+            // Need a threat position to check cover against
+            Vector3 threatPos = transform.position + Vector3.right * 10f; // Default
+            if (currentTarget != null)
+            {
+                threatPos = currentTarget.Position;
+            }
+            else if (perceptionManager != null)
+            {
+                var closestEnemy = perceptionManager.GetClosestVisibleEnemy();
+                if (closestEnemy != null)
+                {
+                    threatPos = closestEnemy.transform.position;
+                }
+            }
+
+            var coverCheck = coverQuery.CheckCoverAt(transform.position, threatPos);
+            return coverCheck.Type.ToString();
         }
 
         public string GetCurrentStateName() => currentStateType.ToString();
@@ -418,6 +432,19 @@ namespace Starbelter.AI
 
         // === TARGETING ===
 
+        /// <summary>
+        /// Information about a potential target, used for target prioritization.
+        /// </summary>
+        public struct TargetInfo
+        {
+            public ITargetable Target;
+            public float Distance;
+            public bool HasCover;
+            public bool IsExposed;          // No cover at all
+            public bool IsShootingAtMe;     // Their current target is us
+            public float Score;             // Calculated priority (higher = better target)
+        }
+
         public void SetTarget(ITargetable target)
         {
             currentTarget = target;
@@ -426,6 +453,165 @@ namespace Starbelter.AI
         public void ClearTarget()
         {
             currentTarget = null;
+        }
+
+        /// <summary>
+        /// Get all valid enemy targets within range with scoring information.
+        /// </summary>
+        public List<TargetInfo> GetAllValidTargets(float maxRange = float.MaxValue)
+        {
+            var results = new List<TargetInfo>();
+            var coverQuery = CoverQuery.Instance;
+
+            var allTargets = FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            foreach (var mb in allTargets)
+            {
+                var targetable = mb as ITargetable;
+                if (targetable == null) continue;
+                if (targetable.Team == team || targetable.Team == Team.Neutral) continue;
+                if (targetable.IsDead) continue;
+
+                float dist = Vector3.Distance(transform.position, targetable.Position);
+                if (dist > maxRange) continue;
+
+                // Check LOS
+                if (!HasLineOfSight(transform.position, targetable.Position)) continue;
+
+                // Check if ducked behind half cover (invisible)
+                if (targetable.IsDucked && coverQuery != null)
+                {
+                    var coverCheck = coverQuery.CheckCoverAt(targetable.Position, transform.position);
+                    if (coverCheck.HasCover && coverCheck.Type == CoverType.Half)
+                    {
+                        continue; // Can't see them
+                    }
+                }
+
+                // Build target info
+                var info = new TargetInfo
+                {
+                    Target = targetable,
+                    Distance = dist,
+                    HasCover = false,
+                    IsExposed = true,
+                    IsShootingAtMe = false,
+                    Score = 0f
+                };
+
+                // Check if target has cover from us
+                if (coverQuery != null)
+                {
+                    var coverCheck = coverQuery.CheckCoverAt(targetable.Position, transform.position);
+                    info.HasCover = coverCheck.HasCover;
+                    info.IsExposed = !coverCheck.HasCover;
+                }
+
+                // Check if they're shooting at us (simple: their target == us)
+                var targetController = targetable.Transform?.GetComponent<UnitController>();
+                if (targetController != null && targetController.CurrentTarget != null)
+                {
+                    var theirTarget = targetController.CurrentTarget as MonoBehaviour;
+                    if (theirTarget != null && theirTarget.gameObject == gameObject)
+                    {
+                        info.IsShootingAtMe = true;
+                    }
+                }
+
+                // Calculate score
+                info.Score = CalculateTargetScore(info);
+                results.Add(info);
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Calculate priority score for a target. Higher = better target.
+        /// </summary>
+        private float CalculateTargetScore(TargetInfo info)
+        {
+            float score = 100f - info.Distance;  // Base: closer is better
+
+            if (info.IsExposed) score += 50f;    // Exposed targets are high priority
+            if (info.IsShootingAtMe) score += 30f; // Threats to us are priority
+
+            // Bonus for low HP targets (if we can access it)
+            var targetController = info.Target.Transform?.GetComponent<UnitController>();
+            if (targetController?.Character != null)
+            {
+                float hpPercent = targetController.Character.HealthPercent;
+                if (hpPercent < 0.5f) score += 20f;  // Low HP bonus
+            }
+
+            return score;
+        }
+
+        /// <summary>
+        /// Find the best target based on tactical scoring.
+        /// Prioritizes: exposed targets, threats shooting at us, proximity.
+        /// </summary>
+        public ITargetable FindBestTarget(float maxRange = float.MaxValue)
+        {
+            var targets = GetAllValidTargets(maxRange);
+            if (targets.Count == 0) return null;
+
+            TargetInfo best = targets[0];
+            foreach (var t in targets)
+            {
+                if (t.Score > best.Score) best = t;
+            }
+
+            return best.Target;
+        }
+
+        /// <summary>
+        /// Find an exposed target (no cover) if available, otherwise closest.
+        /// </summary>
+        public ITargetable FindExposedTarget(float maxRange = float.MaxValue)
+        {
+            var targets = GetAllValidTargets(maxRange);
+            if (targets.Count == 0) return null;
+
+            // First try to find an exposed target
+            TargetInfo? bestExposed = null;
+            foreach (var t in targets)
+            {
+                if (t.IsExposed)
+                {
+                    if (!bestExposed.HasValue || t.Distance < bestExposed.Value.Distance)
+                    {
+                        bestExposed = t;
+                    }
+                }
+            }
+
+            if (bestExposed.HasValue) return bestExposed.Value.Target;
+
+            // Fallback to closest
+            return FindClosestVisibleEnemy(maxRange);
+        }
+
+        /// <summary>
+        /// Find an enemy that is currently shooting at us.
+        /// </summary>
+        public ITargetable FindThreatTarget(float maxRange = float.MaxValue)
+        {
+            var targets = GetAllValidTargets(maxRange);
+
+            // Find closest enemy shooting at us
+            ITargetable closest = null;
+            float closestDist = maxRange;
+
+            foreach (var t in targets)
+            {
+                if (t.IsShootingAtMe && t.Distance < closestDist)
+                {
+                    closest = t.Target;
+                    closestDist = t.Distance;
+                }
+            }
+
+            return closest;
         }
 
         /// <summary>
@@ -451,8 +637,74 @@ namespace Starbelter.AI
             return TileThreatMap.Instance.GetThreatAtWorld(pos, team);
         }
 
+        /// <summary>
+        /// Get perceived threat at current position, with uncertainty based on Tactics stat.
+        /// Low tactics = more error in threat assessment. High tactics = accurate assessment.
+        /// Formula: offset = (20 - tactics) * 3, result = actual + Random(-offset, +offset)
+        /// </summary>
+        public float GetPerceivedThreat()
+        {
+            float actualThreat = GetThreatAtPosition(transform.position);
+
+            int tactics = character?.Tactics ?? 10;
+            float offset = (20 - tactics) * 3f;
+
+            // Add random error based on tactics (clamped to >= 0)
+            float perceivedThreat = actualThreat + Random.Range(-offset, offset);
+            return Mathf.Max(0f, perceivedThreat);
+        }
+
         public bool IsInDanger() => GetThreatAtPosition(transform.position) >= THREAT_DANGEROUS;
         public bool IsInDeadlyDanger() => GetThreatAtPosition(transform.position) >= THREAT_DEADLY;
+
+        /// <summary>
+        /// Returns true if threat is severe (too hot to peek while pinned).
+        /// </summary>
+        public bool IsThreatSevere() => GetThreatAtPosition(transform.position) >= THREAT_SEVERE;
+
+        /// <summary>
+        /// Returns true if threat is at panic level.
+        /// Bravery raises the panic threshold: +2 threat per point above 10.
+        /// </summary>
+        public bool IsPanicking()
+        {
+            float threat = GetThreatAtPosition(transform.position);
+            float panicThreshold = GetEffectivePanicThreshold();
+            return threat >= panicThreshold;
+        }
+
+        /// <summary>
+        /// Get the effective panic threshold, modified by bravery.
+        /// Base is 40, +2 per bravery point above 10.
+        /// </summary>
+        public float GetEffectivePanicThreshold()
+        {
+            int bravery = character?.Bravery ?? 10;
+            float braveryBonus = Mathf.Max(0, bravery - 10) * 2f;
+            return THREAT_PANIC + braveryBonus;
+        }
+
+        /// <summary>
+        /// Returns true if pinned but threat is low enough to peek and shoot.
+        /// </summary>
+        public bool CanPeekWhilePinned()
+        {
+            float threat = GetThreatAtPosition(transform.position);
+            return threat >= THREAT_PIN_THRESHOLD && threat < THREAT_SEVERE;
+        }
+
+        /// <summary>
+        /// Get effective morale including squad modifiers (base + squad diff + leadership).
+        /// Falls back to base morale if no squad.
+        /// </summary>
+        public float GetEffectiveMorale()
+        {
+            if (squad != null)
+            {
+                return squad.GetEffectiveMorale(this);
+            }
+            return character?.CurrentMorale ?? 50f;
+        }
 
         // === MOVEMENT REQUESTS ===
 
@@ -729,7 +981,7 @@ namespace Starbelter.AI
 
         /// <summary>
         /// Interrupts movement but redirects to nearest tile center first.
-        /// Use this when interrupting movement (suppression, state change) to avoid stopping mid-tile.
+        /// Use this when interrupting movement (pinned, state change) to avoid stopping mid-tile.
         /// </summary>
         public void InterruptMovement()
         {
@@ -740,37 +992,166 @@ namespace Starbelter.AI
 
         // === COMBAT ===
 
+        private const float MAX_SPREAD_ANGLE = 30f;  // Maximum spread in degrees at 0% accuracy
+
+        /// <summary>
+        /// Fire at the current target using the default snap shot.
+        /// </summary>
         public void FireAtTarget()
+        {
+            FireShot(ShotType.Snap);
+        }
+
+        /// <summary>
+        /// Fire a single projectile at the current target with the specified shot type.
+        /// </summary>
+        public void FireShot(ShotType shotType)
         {
             if (currentTarget == null || projectilePrefab == null) return;
 
+            var weapon = character?.MainWeapon;
+
             // Check ammo - don't fire if empty
-            if (character?.MainWeapon != null)
+            if (weapon != null && !weapon.ConsumeAmmo())
             {
-                if (!character.MainWeapon.ConsumeAmmo())
-                {
-                    // Out of ammo - can't fire
-                    return;
-                }
+                return;
             }
 
+            // Get accuracy and cover penetration for this shot type
+            float accuracy = GetShotAccuracy(shotType);
+            float coverPenetration = GetShotCoverPenetration(shotType);
+
             Vector3 spawnPos = firePoint != null ? firePoint.position : transform.position;
-            Vector2 direction = (currentTarget.Position - spawnPos).normalized;
+            Vector2 baseDirection = (currentTarget.Position - spawnPos).normalized;
+
+            // Apply spread based on accuracy
+            Vector2 finalDirection = ApplySpread(baseDirection, accuracy);
 
             GameObject projObj = Instantiate(projectilePrefab, spawnPos, Quaternion.identity);
             var projectile = projObj.GetComponent<Projectile>();
             if (projectile != null)
             {
-                projectile.Fire(direction, team, gameObject);
+                projectile.SetCoverPenetration(coverPenetration);
+                projectile.SetShotInfo(shotType, accuracy);
+                projectile.Fire(finalDirection, team, gameObject);
             }
 
             lastFireTime = Time.time;
         }
 
-        public void ApplySuppression(float amount = 20f)
+        /// <summary>
+        /// Get the accuracy for a shot type from the weapon.
+        /// </summary>
+        private float GetShotAccuracy(ShotType shotType)
         {
-            suppression += amount;
-            suppression = Mathf.Min(suppression, 100f);
+            var weapon = character?.MainWeapon;
+            if (weapon == null) return 0.7f;  // Default
+
+            return shotType switch
+            {
+                ShotType.Snap => weapon.SnapAccuracy,
+                ShotType.Aimed => weapon.AimedAccuracy,
+                ShotType.Suppress => weapon.SuppressAccuracy,
+                ShotType.Burst => weapon.BurstAccuracy,
+                _ => weapon.SnapAccuracy
+            };
+        }
+
+        /// <summary>
+        /// Get the cover penetration for a shot type from the weapon.
+        /// </summary>
+        private float GetShotCoverPenetration(ShotType shotType)
+        {
+            var weapon = character?.MainWeapon;
+            if (weapon == null) return 1.0f;  // Default
+
+            return shotType switch
+            {
+                ShotType.Snap => weapon.SnapCoverPenetration,
+                ShotType.Aimed => weapon.AimedCoverPenetration,
+                ShotType.Suppress => weapon.SuppressCoverPenetration,
+                ShotType.Burst => weapon.BurstCoverPenetration,
+                _ => weapon.SnapCoverPenetration
+            };
+        }
+
+        /// <summary>
+        /// Apply spread to a direction based on accuracy.
+        /// </summary>
+        private Vector2 ApplySpread(Vector2 baseDirection, float accuracy)
+        {
+            // Calculate spread angle: 0% accuracy = MAX_SPREAD, 100% accuracy = 0 spread
+            float spreadAngle = MAX_SPREAD_ANGLE * (1f - accuracy);
+            float randomAngle = Random.Range(-spreadAngle, spreadAngle);
+
+            // Rotate direction by random angle
+            float rad = randomAngle * Mathf.Deg2Rad;
+            float cos = Mathf.Cos(rad);
+            float sin = Mathf.Sin(rad);
+            return new Vector2(
+                baseDirection.x * cos - baseDirection.y * sin,
+                baseDirection.x * sin + baseDirection.y * cos
+            ).normalized;
+        }
+
+        /// <summary>
+        /// Fire a burst of shots at the current target.
+        /// </summary>
+        public void FireBurst()
+        {
+            StartCoroutine(FireBurstCoroutine());
+        }
+
+        private Coroutine activeBurstCoroutine;
+        private bool isFiringBurst;
+
+        public bool IsFiringBurst => isFiringBurst;
+
+        private System.Collections.IEnumerator FireBurstCoroutine()
+        {
+            var weapon = character?.MainWeapon;
+            if (weapon == null || !weapon.CanBurst)
+            {
+                // Fallback to snap shot if can't burst
+                FireShot(ShotType.Snap);
+                yield break;
+            }
+
+            isFiringBurst = true;
+            int burstCount = weapon.BurstCount;
+            float burstDelay = weapon.BurstDelay;
+
+            for (int i = 0; i < burstCount; i++)
+            {
+                // Check if we should abort (dead, target gone, state changed, out of ammo)
+                if (IsDead || !IsTargetValid() || !weapon.CanFire)
+                {
+                    break;
+                }
+
+                FireShot(ShotType.Burst);
+
+                // Wait between shots (except after last shot)
+                if (i < burstCount - 1)
+                {
+                    yield return new WaitForSeconds(burstDelay);
+                }
+            }
+
+            isFiringBurst = false;
+        }
+
+        /// <summary>
+        /// Cancel any active burst fire.
+        /// </summary>
+        public void CancelBurst()
+        {
+            if (activeBurstCoroutine != null)
+            {
+                StopCoroutine(activeBurstCoroutine);
+                activeBurstCoroutine = null;
+            }
+            isFiringBurst = false;
         }
 
         // === LINE OF SIGHT ===
@@ -848,6 +1229,14 @@ namespace Starbelter.AI
         {
             squad = newSquad;
             isSquadLeader = isLeader;
+        }
+
+        /// <summary>
+        /// Set the arena this unit is in.
+        /// </summary>
+        public void SetArena(Arena.Arena arena)
+        {
+            currentArena = arena;
         }
 
         public void SetCharacter(Character newCharacter)

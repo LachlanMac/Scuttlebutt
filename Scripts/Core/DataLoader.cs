@@ -44,6 +44,7 @@ namespace Starbelter.Core
         {
             return new ProjectileWeapon
             {
+                // Base stats
                 Name = source.Name,
                 Type = source.Type,
                 Damage = source.Damage,
@@ -53,7 +54,31 @@ namespace Starbelter.Core
                 MagazineSize = source.MagazineSize,
                 CurrentAmmo = source.MagazineSize, // Start with full mag
                 ReloadTime = source.ReloadTime,
-                ProjectilePrefab = source.ProjectilePrefab
+                ProjectilePrefab = source.ProjectilePrefab,
+
+                // Snap Shot
+                SnapAccuracy = source.SnapAccuracy,
+                SnapCoverPenetration = source.SnapCoverPenetration,
+
+                // Aimed Shot
+                CanAimedShot = source.CanAimedShot,
+                AimTime = source.AimTime,
+                AimedAccuracy = source.AimedAccuracy,
+                AimedCoverPenetration = source.AimedCoverPenetration,
+
+                // Suppressing Fire
+                CanSuppress = source.CanSuppress,
+                SuppressionEffectiveness = source.SuppressionEffectiveness,
+                SuppressAccuracy = source.SuppressAccuracy,
+                SuppressFireRateMultiplier = source.SuppressFireRateMultiplier,
+                SuppressCoverPenetration = source.SuppressCoverPenetration,
+
+                // Burst Fire
+                CanBurst = source.CanBurst,
+                BurstCount = source.BurstCount,
+                BurstDelay = source.BurstDelay,
+                BurstAccuracy = source.BurstAccuracy,
+                BurstCoverPenetration = source.BurstCoverPenetration
             };
         }
 
@@ -87,6 +112,7 @@ namespace Starbelter.Core
             {
                 var weapon = new ProjectileWeapon
                 {
+                    // Base stats
                     Name = entry.name,
                     Type = ParseProjectileType(entry.type),
                     Damage = entry.damage,
@@ -95,11 +121,35 @@ namespace Starbelter.Core
                     MaxRange = entry.maxRange,
                     MagazineSize = entry.magazineSize,
                     CurrentAmmo = entry.magazineSize,
-                    ReloadTime = entry.reloadTime
+                    ReloadTime = entry.reloadTime,
+
+                    // Snap Shot
+                    SnapAccuracy = entry.snapAccuracy > 0 ? entry.snapAccuracy : 0.7f,
+                    SnapCoverPenetration = entry.snapCoverPenetration > 0 ? entry.snapCoverPenetration : 1.0f,
+
+                    // Aimed Shot
+                    CanAimedShot = entry.canAimedShot,
+                    AimTime = entry.aimTime > 0 ? entry.aimTime : 1.5f,
+                    AimedAccuracy = entry.aimedAccuracy > 0 ? entry.aimedAccuracy : 1.0f,
+                    AimedCoverPenetration = entry.aimedCoverPenetration > 0 ? entry.aimedCoverPenetration : 0.5f,
+
+                    // Suppressing Fire
+                    CanSuppress = entry.canSuppress,
+                    SuppressionEffectiveness = entry.suppressionEffectiveness,
+                    SuppressAccuracy = entry.suppressAccuracy > 0 ? entry.suppressAccuracy : 0.5f,
+                    SuppressFireRateMultiplier = entry.suppressFireRateMultiplier > 0 ? entry.suppressFireRateMultiplier : 2.0f,
+                    SuppressCoverPenetration = entry.suppressCoverPenetration > 0 ? entry.suppressCoverPenetration : 1.5f,
+
+                    // Burst Fire
+                    CanBurst = entry.canBurst,
+                    BurstCount = entry.burstCount > 0 ? entry.burstCount : 3,
+                    BurstDelay = entry.burstDelay > 0 ? entry.burstDelay : 0.1f,
+                    BurstAccuracy = entry.burstAccuracy > 0 ? entry.burstAccuracy : 0.8f,
+                    BurstCoverPenetration = entry.burstCoverPenetration > 0 ? entry.burstCoverPenetration : 1.25f
                 };
 
                 weapons[entry.id] = weapon;
-                Debug.Log($"[DataLoader] Loaded weapon: {entry.id} ({entry.name})");
+                Debug.Log($"[DataLoader] Loaded weapon: {entry.id} ({entry.name}) - Burst:{entry.canBurst}, Suppress:{entry.canSuppress}, Aimed:{entry.canAimedShot}");
             }
 
             Debug.Log($"[DataLoader] Loaded {weapons.Count} weapons");
@@ -298,6 +348,7 @@ namespace Starbelter.Core
                 Perception = source.Perception,
                 Stealth = source.Stealth,
                 Tactics = source.Tactics,
+                Leadership = source.Leadership,
                 PhysicalMitigation = source.PhysicalMitigation,
                 HeatMitigation = source.HeatMitigation,
                 EnergyMitigation = source.EnergyMitigation,
@@ -358,7 +409,8 @@ namespace Starbelter.Core
                     Agility = entry.agility,
                     Perception = entry.perception,
                     Stealth = entry.stealth,
-                    Tactics = entry.tactics
+                    Tactics = entry.tactics,
+                    Leadership = entry.leadership
                 };
 
                 roster[entry.id] = character;
@@ -561,6 +613,30 @@ namespace Starbelter.Core
             public float maxRange;
             public int magazineSize;
             public float reloadTime;
+
+            // Snap Shot
+            public float snapAccuracy;
+            public float snapCoverPenetration;
+
+            // Aimed Shot
+            public bool canAimedShot;
+            public float aimTime;
+            public float aimedAccuracy;
+            public float aimedCoverPenetration;
+
+            // Suppressing Fire
+            public bool canSuppress;
+            public float suppressionEffectiveness;
+            public float suppressAccuracy;
+            public float suppressFireRateMultiplier;
+            public float suppressCoverPenetration;
+
+            // Burst Fire
+            public bool canBurst;
+            public int burstCount;
+            public float burstDelay;
+            public float burstAccuracy;
+            public float burstCoverPenetration;
         }
 
         [System.Serializable]
@@ -590,6 +666,7 @@ namespace Starbelter.Core
             public int perception;
             public int stealth;
             public int tactics;
+            public int leadership;
         }
 
         [System.Serializable]

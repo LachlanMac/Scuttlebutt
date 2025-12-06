@@ -2,6 +2,7 @@ using UnityEngine;
 using Pathfinding;
 using Starbelter.Pathfinding;
 using Starbelter.Core;
+using Starbelter.Arena;
 
 namespace Starbelter.AI
 {
@@ -17,6 +18,7 @@ namespace Starbelter.AI
 
         [Header("Movement Settings")]
         [SerializeField] private float moveSpeed = 5f;
+        private float speedMultiplier = 1f;
 
         // Components
         private Seeker seeker;
@@ -66,6 +68,20 @@ namespace Starbelter.AI
             set => moveSpeed = value;
         }
 
+        /// <summary>
+        /// Speed multiplier for combat movement, etc. Default is 1.0.
+        /// </summary>
+        public float SpeedMultiplier
+        {
+            get => speedMultiplier;
+            set => speedMultiplier = Mathf.Clamp(value, 0.1f, 2f);
+        }
+
+        /// <summary>
+        /// Get the effective move speed (base speed * multiplier).
+        /// </summary>
+        public float EffectiveSpeed => moveSpeed * speedMultiplier;
+
         private void Awake()
         {
             seeker = GetComponent<Seeker>();
@@ -108,11 +124,22 @@ namespace Starbelter.AI
                 return false;
             }
 
-            // Check if tile is walkable on A* graph
+            // Check if tile is walkable on A* graph (using arena-specific graph if available)
             GraphNode node = null;
             if (AstarPath.active != null)
             {
-                node = AstarPath.active.GetNearest(worldPos).node;
+                var arena = unitController?.CurrentArena;
+                if (arena != null && arena.FloorCount > 0)
+                {
+                    // Use arena's combined graph mask (covers all floors)
+                    var constraint = NearestNodeConstraint.Walkable;
+                    constraint.graphMask = arena.GetCombinedGraphMask();
+                    node = AstarPath.active.GetNearest(worldPos, constraint).node;
+                }
+                else
+                {
+                    node = AstarPath.active.GetNearest(worldPos).node;
+                }
             }
             if (node == null || !node.Walkable)
             {
@@ -341,15 +368,18 @@ namespace Starbelter.AI
             // Get agility stat (default to 10 if no character)
             int agility = unitController?.Character?.Agility ?? 10;
 
+            // Calculate target speed with multiplier
+            float targetSpeed = EffectiveSpeed;
+
             // Calculate acceleration rate based on agility
             // Agility 1 = 0.5x acceleration (2 seconds to full speed)
             // Agility 10 = 1x acceleration (1 second to full speed)
             // Agility 20 = 2x acceleration (0.5 seconds to full speed)
             float agilityMultiplier = 0.5f + (agility / 20f) * 1.5f;
-            float acceleration = (moveSpeed / BASE_ACCELERATION_TIME) * agilityMultiplier;
+            float acceleration = (targetSpeed / BASE_ACCELERATION_TIME) * agilityMultiplier;
 
-            // Smoothly accelerate toward max speed
-            currentSpeed = Mathf.MoveTowards(currentSpeed, moveSpeed, acceleration * Time.deltaTime);
+            // Smoothly accelerate toward target speed
+            currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, acceleration * Time.deltaTime);
         }
 
         private bool RequestPath(Vector3 destination)
@@ -362,6 +392,19 @@ namespace Starbelter.AI
 
             lastPathRequestTime = Time.time;
             isMoving = true; // Set immediately so states know we're about to move
+
+            // Use arena-specific graph mask if available
+            var arena = unitController?.CurrentArena;
+            if (arena != null && arena.FloorCount > 0)
+            {
+                // Set seeker to use this arena's graphs (all floors)
+                seeker.graphMask = arena.GetCombinedGraphMask();
+            }
+            else
+            {
+                // Use all graphs
+                seeker.graphMask = GraphMask.everything;
+            }
 
             seeker.StartPath(transform.position, destination, OnPathComplete);
             return true;

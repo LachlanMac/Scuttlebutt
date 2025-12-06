@@ -8,7 +8,6 @@ namespace Starbelter.AI
     /// </summary>
     public class ReloadState : UnitState
     {
-        private const float SUPPRESSION_PIN_THRESHOLD = 80f;
         private float reloadTimer;
         private float reloadDuration;
         private bool wasDucked;
@@ -41,8 +40,8 @@ namespace Starbelter.AI
         {
             if (!IsValid) return;
 
-            // Check suppression - get pinned if too suppressed
-            if (controller.Suppression >= SUPPRESSION_PIN_THRESHOLD)
+            // Check if threat is high enough to pin us
+            if (controller.IsPinned)
             {
                 controller.ChangeState(UnitStateType.Pinned);
                 return;

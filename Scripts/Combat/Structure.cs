@@ -60,18 +60,21 @@ namespace Starbelter.Combat
         /// <summary>
         /// Called by Projectile to check if it should be blocked.
         /// Returns true if blocked (projectile should be destroyed).
-        /// Aimed shots halve the block chance (unless it's 100%).
+        /// Cover penetration modifies block chance (lower = penetrates better).
         /// </summary>
         public bool TryBlockProjectile(Projectile projectile)
         {
-            // Aimed shots halve block chance, but 100% cover is still 100%
-            float effectiveBlockChance = blockChance;
-            if (projectile.IsAimedShot && blockChance < 1f)
-            {
-                effectiveBlockChance = blockChance * 0.5f;
-            }
+            // Apply cover penetration to block chance
+            // coverPenetration < 1.0 = penetrates better (aimed shots)
+            // coverPenetration > 1.0 = blocked more easily (suppression/burst)
+            float effectiveBlockChance = blockChance * projectile.CoverPenetration;
+            effectiveBlockChance = Mathf.Clamp01(effectiveBlockChance);
 
-            bool blocked = Random.value <= effectiveBlockChance;
+            float roll = Random.value;
+            bool blocked = roll <= effectiveBlockChance;
+
+            // Record for projectile's consolidated report
+            projectile.RecordCoverEncounter(name, blocked, effectiveBlockChance);
 
             if (blocked)
             {

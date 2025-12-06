@@ -21,10 +21,9 @@ namespace Starbelter.AI
             lastDangerCheckTime = 0f;
 
             // Debug: why are we entering Ready?
-            float suppression = controller.Suppression;
             float threat = controller.GetThreatAtPosition(controller.transform.position);
             var enemy = controller.FindClosestVisibleEnemy(controller.PerceptionRange);
-            Debug.Log($"[{controller.name}] Entering READY - Suppression={suppression:F0}, Threat={threat:F1}, VisibleEnemy={enemy != null}");
+            Debug.Log($"[{controller.name}] Entering READY - Threat={threat:F1}, VisibleEnemy={enemy != null}");
         }
 
         public override void Update()

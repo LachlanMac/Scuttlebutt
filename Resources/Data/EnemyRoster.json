@@ -17,7 +17,8 @@
       "agility": 10,
       "perception": 13,
       "stealth": 8,
-      "tactics": 16
+      "tactics": 16,
+      "leadership": 16
     },
     {
       "id": "enemy_officer_02",
@@ -36,7 +37,8 @@
       "agility": 11,
       "perception": 12,
       "stealth": 10,
-      "tactics": 14
+      "tactics": 14,
+      "leadership": 13
     },
     {
       "id": "enemy_01",
@@ -55,7 +57,8 @@
       "agility": 11,
       "perception": 12,
       "stealth": 11,
-      "tactics": 13
+      "tactics": 13,
+      "leadership": 13
     },
     {
       "id": "enemy_02",
@@ -74,7 +77,8 @@
       "agility": 12,
       "perception": 16,
       "stealth": 15,
-      "tactics": 10
+      "tactics": 10,
+      "leadership": 10
     },
     {
       "id": "enemy_03",
@@ -93,7 +97,8 @@
       "agility": 9,
       "perception": 10,
       "stealth": 7,
-      "tactics": 11
+      "tactics": 11,
+      "leadership": 11
     },
     {
       "id": "enemy_04",
@@ -112,7 +117,8 @@
       "agility": 12,
       "perception": 11,
       "stealth": 12,
-      "tactics": 10
+      "tactics": 10,
+      "leadership": 9
     },
     {
       "id": "enemy_05",
@@ -131,7 +137,8 @@
       "agility": 15,
       "perception": 11,
       "stealth": 13,
-      "tactics": 9
+      "tactics": 9,
+      "leadership": 9
     },
     {
       "id": "enemy_06",
@@ -150,7 +157,8 @@
       "agility": 11,
       "perception": 12,
       "stealth": 10,
-      "tactics": 8
+      "tactics": 8,
+      "leadership": 7
     },
     {
       "id": "enemy_07",
@@ -169,7 +177,8 @@
       "agility": 10,
       "perception": 14,
       "stealth": 13,
-      "tactics": 8
+      "tactics": 8,
+      "leadership": 7
     },
     {
       "id": "enemy_08",
@@ -188,7 +197,8 @@
       "agility": 10,
       "perception": 8,
       "stealth": 8,
-      "tactics": 7
+      "tactics": 7,
+      "leadership": 6
     },
     {
       "id": "enemy_09",
@@ -207,7 +217,8 @@
       "agility": 11,
       "perception": 10,
       "stealth": 9,
-      "tactics": 7
+      "tactics": 7,
+      "leadership": 6
     },
     {
       "id": "enemy_10",
@@ -226,7 +237,8 @@
       "agility": 10,
       "perception": 9,
       "stealth": 10,
-      "tactics": 6
+      "tactics": 6,
+      "leadership": 5
     }
   ]
 }

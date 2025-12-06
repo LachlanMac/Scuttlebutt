@@ -433,6 +433,80 @@ namespace Starbelter.AI
             }
         }
 
+        #region Morale System
+
+        /// <summary>
+        /// Get leadership bonus from the current squad leader.
+        /// Formula: (leadership - 10) * 2, so Leadership 10 = 0, 15 = +10, 5 = -10
+        /// </summary>
+        public float GetLeadershipBonus()
+        {
+            if (leader == null || leader.IsDead || leader.Character == null)
+            {
+                return 0f;
+            }
+
+            return (leader.Character.Leadership - 10) * 2f;
+        }
+
+        /// <summary>
+        /// Get morale modifier based on squad size difference.
+        /// Compares our alive count vs estimated enemy count.
+        /// Formula: (ourCount - enemyCount) * 5
+        /// </summary>
+        public float GetSquadDifferenceMorale(int visibleEnemyCount)
+        {
+            int ourCount = GetAliveUnitCount();
+            int difference = ourCount - visibleEnemyCount;
+            return difference * 5f;
+        }
+
+        /// <summary>
+        /// Get effective morale for a unit, including all modifiers.
+        /// Total = baseMorale + squadDifference + leadershipBonus (capped 0-100)
+        /// </summary>
+        public float GetEffectiveMorale(UnitController unit)
+        {
+            if (unit == null || unit.Character == null) return 50f;
+
+            float baseMorale = unit.Character.CurrentMorale;
+            float leadershipBonus = GetLeadershipBonus();
+
+            // Get visible enemy count from unit's perception
+            int visibleEnemies = 0;
+            if (unit.PerceptionManager != null)
+            {
+                visibleEnemies = unit.PerceptionManager.GetPerceivedEnemies().Count;
+            }
+            float squadDiff = GetSquadDifferenceMorale(visibleEnemies);
+
+            float total = baseMorale + squadDiff + leadershipBonus;
+
+            // Clamp to 0-100
+            return Mathf.Clamp(total, 0f, 100f);
+        }
+
+        /// <summary>
+        /// Apply morale damage to all squad members when an ally dies.
+        /// Leader death = 2x penalty.
+        /// </summary>
+        public void OnAllyDeath(UnitController deadUnit)
+        {
+            bool wasLeader = deadUnit == leader;
+            float moralePenalty = wasLeader ? 20f : 10f;
+
+            foreach (var member in members)
+            {
+                if (member == null || member.IsDead || member.Character == null) continue;
+                if (member == deadUnit) continue;
+
+                member.Character.TakeMoraleDamage(moralePenalty);
+                Debug.Log($"[{name}] {member.name} morale -{moralePenalty} (ally death). Now: {member.Character.CurrentMorale:F0}");
+            }
+        }
+
+        #endregion
+
 #if UNITY_EDITOR
         private void OnDrawGizmosSelected()
         {

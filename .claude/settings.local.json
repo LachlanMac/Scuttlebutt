@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(mkdir -p:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "WebSearch",
+      "WebFetch(domain:arongranberg.com)"
     ],
     "deny": [],
     "ask": []

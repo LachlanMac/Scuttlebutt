@@ -17,7 +17,8 @@
       "agility": 10,
       "perception": 14,
       "stealth": 9,
-      "tactics": 17
+      "tactics": 17,
+      "leadership": 17
     },
     {
       "id": "ally_officer_02",
@@ -36,7 +37,8 @@
       "agility": 11,
       "perception": 13,
       "stealth": 10,
-      "tactics": 15
+      "tactics": 15,
+      "leadership": 15
     },
     {
       "id": "ally_01",
@@ -55,7 +57,8 @@
       "agility": 11,
       "perception": 12,
       "stealth": 10,
-      "tactics": 14
+      "tactics": 14,
+      "leadership": 14
     },
     {
       "id": "ally_02",
@@ -74,7 +77,8 @@
       "agility": 12,
       "perception": 15,
       "stealth": 14,
-      "tactics": 11
+      "tactics": 11,
+      "leadership": 11
     },
     {
       "id": "ally_03",
@@ -93,7 +97,8 @@
       "agility": 13,
       "perception": 9,
       "stealth": 8,
-      "tactics": 10
+      "tactics": 10,
+      "leadership": 12
     },
     {
       "id": "ally_04",
@@ -112,7 +117,8 @@
       "agility": 13,
       "perception": 12,
       "stealth": 15,
-      "tactics": 9
+      "tactics": 9,
+      "leadership": 9
     },
     {
       "id": "ally_05",
@@ -131,7 +137,8 @@
       "agility": 14,
       "perception": 10,
       "stealth": 9,
-      "tactics": 11
+      "tactics": 11,
+      "leadership": 11
     },
     {
       "id": "ally_06",
@@ -150,7 +157,8 @@
       "agility": 11,
       "perception": 10,
       "stealth": 10,
-      "tactics": 8
+      "tactics": 8,
+      "leadership": 7
     },
     {
       "id": "ally_07",
@@ -169,7 +177,8 @@
       "agility": 11,
       "perception": 14,
       "stealth": 12,
-      "tactics": 10
+      "tactics": 10,
+      "leadership": 9
     },
     {
       "id": "ally_08",
@@ -188,7 +197,8 @@
       "agility": 10,
       "perception": 9,
       "stealth": 10,
-      "tactics": 7
+      "tactics": 7,
+      "leadership": 6
     },
     {
       "id": "ally_09",
@@ -207,7 +217,8 @@
       "agility": 10,
       "perception": 13,
       "stealth": 11,
-      "tactics": 12
+      "tactics": 12,
+      "leadership": 12
     },
     {
       "id": "ally_10",
@@ -226,7 +237,8 @@
       "agility": 10,
       "perception": 9,
       "stealth": 10,
-      "tactics": 6
+      "tactics": 6,
+      "leadership": 5
     }
   ]
 }

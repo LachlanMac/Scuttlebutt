@@ -199,12 +199,19 @@ namespace Starbelter.Core
         [Range(1, 20)] public int Agility = 10;
         [Range(1, 20)] public int Perception = 10;
         [Range(1, 20)] public int Stealth = 10;
-        [Tooltip("Affects squad coordination speed (suppression assignment, etc.)")]
+        [Tooltip("Affects threat perception accuracy and tactical decision-making")]
         [Range(1, 20)] public int Tactics = 10;
+        [Tooltip("Affects squad morale bonus when leading")]
+        [Range(1, 20)] public int Leadership = 10;
 
         [Header("Runtime Health (set at spawn)")]
         [HideInInspector] public float MaxHealth;
         [HideInInspector] public float CurrentHealth;
+
+        [Header("Runtime Morale")]
+        [HideInInspector] public float MaxMorale = 100f;
+        [HideInInspector] public float CurrentMorale = 100f;
+        [HideInInspector] public bool HasAppliedLowHealthMoralePenalty = false;
 
         [Header("Damage Mitigation (0-100%, from armor/gear)")]
         [Range(0f, 100f)] public float PhysicalMitigation = 0f;
@@ -215,6 +222,7 @@ namespace Starbelter.Core
         // Computed properties
         public float HealthPercent => MaxHealth > 0 ? CurrentHealth / MaxHealth : 0f;
         public bool IsDead => CurrentHealth <= 0;
+        public float MoralePercent => MaxMorale > 0 ? CurrentMorale / MaxMorale : 0f;
 
         /// <summary>
         /// Create a default character with average stats.
@@ -237,6 +245,7 @@ namespace Starbelter.Core
             Perception = 10;
             Stealth = 10;
             Tactics = 10;
+            Leadership = 10;
         }
 
         /// <summary>
@@ -258,6 +267,7 @@ namespace Starbelter.Core
             Perception = Mathf.Clamp(perception, 1, 20);
             Stealth = Mathf.Clamp(stealth, 1, 20);
             Tactics = Mathf.Clamp(tactics, 1, 20);
+            Leadership = 10;
         }
 
         /// <summary>
@@ -286,6 +296,7 @@ namespace Starbelter.Core
             float vitalityMultiplier = StatToMultiplier(Vitality);
             MaxHealth = 50f + (vitalityMultiplier * 100f); // 50-150 range
             CurrentHealth = MaxHealth;
+            InitializeMorale();
         }
 
         /// <summary>
@@ -326,6 +337,24 @@ namespace Starbelter.Core
 
             CurrentHealth += amount;
             CurrentHealth = Mathf.Min(CurrentHealth, MaxHealth);
+        }
+
+        /// <summary>
+        /// Apply morale damage (from ally death, taking damage, etc.)
+        /// </summary>
+        public void TakeMoraleDamage(float amount)
+        {
+            CurrentMorale -= amount;
+            CurrentMorale = Mathf.Clamp(CurrentMorale, 0f, MaxMorale);
+        }
+
+        /// <summary>
+        /// Initialize morale to max (call at spawn).
+        /// </summary>
+        public void InitializeMorale()
+        {
+            CurrentMorale = MaxMorale;
+            HasAppliedLowHealthMoralePenalty = false;
         }
 
         /// <summary>

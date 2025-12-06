@@ -9,29 +9,62 @@ namespace Starbelter.Combat
         Plasma      // Plasma bolts - slower, high damage
     }
 
+    public enum ShotType
+    {
+        Snap,       // Quick reactive shot - moderate accuracy
+        Aimed,      // Careful aimed shot - high accuracy, penetrates cover
+        Suppress,   // Suppressing fire - low accuracy, adds threat
+        Burst       // Burst fire - multiple shots, close range
+    }
+
     /// <summary>
     /// Data class for projectile weapons.
+    /// Loaded from JSON - do not use Unity attributes like [Header].
     /// </summary>
     [System.Serializable]
     public class ProjectileWeapon
     {
-        [Header("Weapon Info")]
+        // --- Weapon Info ---
         public string Name;
         public ProjectileType Type;
 
-        [Header("Combat Stats")]
+        // --- Combat Stats ---
         public float Damage = 10f;
         public float Accuracy = 1f;         // Multiplier on character accuracy (1.0 = normal)
         public float OptimalRange = 10f;    // Best accuracy at this range
         public float MaxRange = 15f;        // Can't hit beyond this
 
-        [Header("Ammo")]
+        // --- Ammo ---
         public int MagazineSize = 10;       // Shots before reload needed
         public int CurrentAmmo;             // Shots remaining in magazine
         public float ReloadTime = 2f;       // Seconds to reload
 
-        [Header("Prefab")]
+        // --- Prefab (set at runtime) ---
         public GameObject ProjectilePrefab;
+
+        // --- Snap Shot (quick, reactive) ---
+        public float SnapAccuracy = 0.7f;
+        public float SnapCoverPenetration = 1.0f;
+
+        // --- Aimed Shot (careful, deadly) ---
+        public bool CanAimedShot = true;
+        public float AimTime = 1.5f;
+        public float AimedAccuracy = 1.0f;
+        public float AimedCoverPenetration = 0.5f;
+
+        // --- Suppressing Fire (volume of fire) ---
+        public bool CanSuppress = true;
+        public float SuppressionEffectiveness = 1.0f;  // Threat multiplier when suppressing
+        public float SuppressAccuracy = 0.5f;
+        public float SuppressFireRateMultiplier = 2.0f;
+        public float SuppressCoverPenetration = 1.5f;
+
+        // --- Burst Fire (controlled burst) ---
+        public bool CanBurst = false;
+        public int BurstCount = 3;
+        public float BurstDelay = 0.1f;
+        public float BurstAccuracy = 0.8f;
+        public float BurstCoverPenetration = 1.25f;
 
         public ProjectileWeapon()
         {
@@ -56,6 +89,16 @@ namespace Starbelter.Combat
             if (CurrentAmmo <= 0) return false;
             CurrentAmmo--;
             return true;
+        }
+
+        /// <summary>
+        /// Consume multiple shots (for burst fire). Returns actual shots consumed.
+        /// </summary>
+        public int ConsumeAmmo(int count)
+        {
+            int consumed = Mathf.Min(count, CurrentAmmo);
+            CurrentAmmo -= consumed;
+            return consumed;
         }
 
         /// <summary>
