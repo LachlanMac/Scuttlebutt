@@ -334,21 +334,26 @@ namespace Starbelter.Core
                 FirstName = source.FirstName,
                 LastName = source.LastName,
                 Callsign = source.Callsign,
+                Branch = source.Branch,
                 IsOfficer = source.IsOfficer,
-                EnlistedRank = source.EnlistedRank,
-                OfficerRank = source.OfficerRank,
+                Rank = source.Rank,
                 YearsOfService = source.YearsOfService,
                 Specialization = source.Specialization,
+                Profession = source.Profession,
                 MainWeaponId = source.MainWeaponId,
-                Vitality = source.Vitality,
+                Fitness = source.Fitness,
                 Accuracy = source.Accuracy,
-                Reflex = source.Reflex,
+                Reflexes = source.Reflexes,
                 Bravery = source.Bravery,
-                Agility = source.Agility,
                 Perception = source.Perception,
                 Stealth = source.Stealth,
                 Tactics = source.Tactics,
                 Leadership = source.Leadership,
+                Technical = source.Technical,
+                Composure = source.Composure,
+                Discipline = source.Discipline,
+                Logic = source.Logic,
+                Communication = source.Communication,
                 PhysicalMitigation = source.PhysicalMitigation,
                 HeatMitigation = source.HeatMitigation,
                 EnergyMitigation = source.EnergyMitigation,
@@ -396,21 +401,26 @@ namespace Starbelter.Core
                     FirstName = entry.firstName,
                     LastName = entry.lastName,
                     Callsign = entry.callsign,
+                    Branch = ParseBranch(entry.branch),
                     IsOfficer = entry.isOfficer,
-                    EnlistedRank = ParseEnlistedRank(entry.enlistedRank),
-                    OfficerRank = ParseOfficerRank(entry.officerRank),
+                    Rank = entry.rank,
                     YearsOfService = entry.yearsOfService,
                     Specialization = ParseSpecialization(entry.specialization),
+                    Profession = ParseProfession(entry.profession),
                     MainWeaponId = entry.mainWeaponId,
-                    Vitality = entry.vitality,
+                    Fitness = entry.fitness,
                     Accuracy = entry.accuracy,
-                    Reflex = entry.reflex,
+                    Reflexes = entry.reflexes,
                     Bravery = entry.bravery,
-                    Agility = entry.agility,
                     Perception = entry.perception,
                     Stealth = entry.stealth,
                     Tactics = entry.tactics,
-                    Leadership = entry.leadership
+                    Leadership = entry.leadership,
+                    Technical = entry.technical,
+                    Composure = entry.composure,
+                    Discipline = entry.discipline,
+                    Logic = entry.logic,
+                    Communication = entry.communication
                 };
 
                 roster[entry.id] = character;
@@ -421,40 +431,14 @@ namespace Starbelter.Core
             return roster;
         }
 
-        private static MarineEnlistedRank ParseEnlistedRank(string rank)
+        private static ServiceBranch ParseBranch(string branch)
         {
-            return rank switch
+            return branch?.ToLower() switch
             {
-                "Private" => MarineEnlistedRank.Private,
-                "PrivateFirstClass" => MarineEnlistedRank.PrivateFirstClass,
-                "LanceCorporal" => MarineEnlistedRank.LanceCorporal,
-                "Corporal" => MarineEnlistedRank.Corporal,
-                "Sergeant" => MarineEnlistedRank.Sergeant,
-                "StaffSergeant" => MarineEnlistedRank.StaffSergeant,
-                "GunnerySergeant" => MarineEnlistedRank.GunnerySergeant,
-                "MasterSergeant" => MarineEnlistedRank.MasterSergeant,
-                "FirstSergeant" => MarineEnlistedRank.FirstSergeant,
-                "MasterGunnerySergeant" => MarineEnlistedRank.MasterGunnerySergeant,
-                "SergeantMajor" => MarineEnlistedRank.SergeantMajor,
-                _ => MarineEnlistedRank.Private
-            };
-        }
-
-        private static MarineOfficerRank ParseOfficerRank(string rank)
-        {
-            return rank switch
-            {
-                "SecondLieutenant" => MarineOfficerRank.SecondLieutenant,
-                "FirstLieutenant" => MarineOfficerRank.FirstLieutenant,
-                "Captain" => MarineOfficerRank.Captain,
-                "Major" => MarineOfficerRank.Major,
-                "LieutenantColonel" => MarineOfficerRank.LieutenantColonel,
-                "Colonel" => MarineOfficerRank.Colonel,
-                "BrigadierGeneral" => MarineOfficerRank.BrigadierGeneral,
-                "MajorGeneral" => MarineOfficerRank.MajorGeneral,
-                "LieutenantGeneral" => MarineOfficerRank.LieutenantGeneral,
-                "General" => MarineOfficerRank.General,
-                _ => MarineOfficerRank.SecondLieutenant
+                "marine" => ServiceBranch.Marine,
+                "navy" => ServiceBranch.Navy,
+                "civilian" => ServiceBranch.Civilian,
+                _ => ServiceBranch.Marine
             };
         }
 
@@ -466,6 +450,22 @@ namespace Starbelter.Core
                 "Shocktrooper" => Specialization.Shocktrooper,
                 "Marksman" => Specialization.Marksman,
                 _ => Specialization.Rifleman
+            };
+        }
+
+        private static ProfessionCategory ParseProfession(string profession)
+        {
+            return profession switch
+            {
+                "Combat" => ProfessionCategory.Combat,
+                "Pilot" => ProfessionCategory.Pilot,
+                "Engineering" => ProfessionCategory.Engineering,
+                "Medical" => ProfessionCategory.Medical,
+                "Operations" => ProfessionCategory.Operations,
+                "Command" => ProfessionCategory.Command,
+                "Administration" => ProfessionCategory.Administration,
+                "Maintenance" => ProfessionCategory.Maintenance,
+                _ => ProfessionCategory.Combat
             };
         }
 
@@ -561,13 +561,13 @@ namespace Starbelter.Core
         {
             if (character.IsOfficer)
             {
-                // Officers: O-1 to O-10 map to 100-109
-                return 100 + (int)character.OfficerRank;
+                // Officers: O-1 to O-10 map to 100-110
+                return 100 + character.Rank;
             }
             else
             {
-                // Enlisted: E-1 to E-9 map to 1-11 (based on enum order)
-                return (int)character.EnlistedRank + 1;
+                // Enlisted: E-1 to E-9 map to 1-9
+                return character.Rank;
             }
         }
 
@@ -653,20 +653,25 @@ namespace Starbelter.Core
             public string lastName;
             public string callsign;
             public bool isOfficer;
-            public string enlistedRank;
-            public string officerRank;
+            public string branch;
+            public int rank;
             public int yearsOfService;
             public string specialization;
+            public string profession;
             public string mainWeaponId;
-            public int vitality;
+            public int fitness;
             public int accuracy;
-            public int reflex;
+            public int reflexes;
             public int bravery;
-            public int agility;
             public int perception;
             public int stealth;
             public int tactics;
             public int leadership;
+            public int technical;
+            public int composure;
+            public int discipline;
+            public int logic;
+            public int communication;
         }
 
         [System.Serializable]

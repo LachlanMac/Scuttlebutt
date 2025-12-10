@@ -273,11 +273,11 @@ namespace Starbelter.Combat
 
             float baseDodge = coverDodge;
 
-            // Modify by reflex stat
+            // Modify by reflexes stat
             if (unitController.Character != null)
             {
-                float reflexMod = Character.StatToModifier(unitController.Character.Reflex);
-                baseDodge += reflexMod * 0.05f; // Reflex adds smaller bonus now (up to ~2.5%)
+                float reflexMod = Character.StatToModifier(unitController.Character.Reflexes);
+                baseDodge += reflexMod * 0.05f; // Reflexes adds smaller bonus now (up to ~2.5%)
             }
 
             return Mathf.Clamp01(baseDodge);

@@ -129,23 +129,49 @@ namespace Starbelter.Arena
         /// </summary>
         public void SpawnTestUnits()
         {
-            if (spawnedArena == null || testUnitPrefab == null) return;
-
-            var bounds = spawnedArena.Bounds;
-
-            for (int i = 0; i < testUnitCount; i++)
+            if (spawnedArena == null)
             {
-                // Random position within arena bounds
-                float x = Random.Range(bounds.min.x + 1, bounds.max.x - 1);
-                float y = Random.Range(bounds.min.y + 1, bounds.max.y - 1);
-                Vector3 spawnPos = new Vector3(x, y, 0);
+                Debug.LogWarning("[TestGameManager] No arena spawned! Click 'Spawn Arena' first.");
+                return;
+            }
+            if (testUnitPrefab == null)
+            {
+                Debug.LogWarning("[TestGameManager] No testUnitPrefab assigned in Inspector!");
+                return;
+            }
 
-                // Snap to tile
-                var tile = spawnedArena.WorldToTile(spawnPos);
-                spawnPos = spawnedArena.TileToWorld(tile);
+            var floor = spawnedArena.GetFloor(0); // Spawn on first floor
+            if (floor == null || floor.Graph == null)
+            {
+                Debug.LogError("[TestGameManager] No floor or graph available for spawning!");
+                return;
+            }
 
-                // Check if tile is available
-                if (!spawnedArena.IsTileAvailable(tile))
+            int spawned = 0;
+            int attempts = 0;
+            int maxAttempts = testUnitCount * 20; // Prevent infinite loop
+
+            while (spawned < testUnitCount && attempts < maxAttempts)
+            {
+                attempts++;
+
+                // Pick a random walkable node from the graph
+                var graph = floor.Graph;
+                var nodes = new System.Collections.Generic.List<global::Pathfinding.GraphNode>();
+                graph.GetNodes(node => { if (node.Walkable) nodes.Add(node); });
+
+                if (nodes.Count == 0)
+                {
+                    Debug.LogError("[TestGameManager] No walkable nodes found!");
+                    return;
+                }
+
+                var randomNode = nodes[Random.Range(0, nodes.Count)];
+                Vector3 spawnPos = (Vector3)randomNode.position;
+                var tile = floor.WorldToTile(spawnPos);
+
+                // Check if tile is available (not occupied)
+                if (!floor.IsTileAvailable(tile))
                 {
                     continue; // Skip occupied tiles
                 }
@@ -155,16 +181,22 @@ namespace Starbelter.Arena
 
                 if (unit != null)
                 {
-                    unit.name = $"TestUnit_{i + 1}";
+                    spawned++;
+                    unit.name = $"TestUnit_{spawned}";
                     unit.SetTeam(testUnitTeam);
                     spawnedArena.RegisterUnit(unit);
-                    spawnedArena.OccupyTile(unitObj, tile);
+                    floor.OccupyTile(unitObj, tile);
                     unit.SetArena(spawnedArena);
                     spawnedUnits.Add(unit);
 
                     if (logInitialization)
-                        Debug.Log($"[TestGameManager] Spawned unit '{unit.name}' at {tile}");
+                        Debug.Log($"[TestGameManager] Spawned unit '{unit.name}' at {tile} (walkable node)");
                 }
+            }
+
+            if (spawned < testUnitCount)
+            {
+                Debug.LogWarning($"[TestGameManager] Only spawned {spawned}/{testUnitCount} units after {attempts} attempts");
             }
         }
 
@@ -191,11 +223,26 @@ namespace Starbelter.Arena
             Debug.Log("[TestGameManager] Test cleanup complete");
         }
 
+        /// <summary>
+        /// Set all spawned units to a specific behavior mode.
+        /// </summary>
+        private void SetAllUnitsModes(BehaviorMode mode)
+        {
+            foreach (var unit in spawnedUnits)
+            {
+                if (unit != null)
+                {
+                    unit.ChangeBehaviorMode(mode);
+                }
+            }
+            Debug.Log($"[TestGameManager] Set all units to {mode} mode");
+        }
+
         #region Debug UI
 
         private void OnGUI()
         {
-            GUILayout.BeginArea(new Rect(10, 10, 200, 300));
+            GUILayout.BeginArea(new Rect(10, 10, 200, 450));
 
             GUILayout.Label("=== Test Game Manager ===");
 
@@ -254,6 +301,42 @@ namespace Starbelter.Arena
                     }
                     GUILayout.EndHorizontal();
                 }
+            }
+
+            // Behavior Mode switching for all units
+            if (spawnedUnits.Count > 0)
+            {
+                GUILayout.Space(10);
+                GUILayout.Label("=== Unit Behavior Mode ===");
+
+                var firstUnit = spawnedUnits[0];
+                if (firstUnit != null)
+                {
+                    GUILayout.Label($"Mode: {firstUnit.CurrentMode}");
+                    GUILayout.Label($"State: {firstUnit.CurrentStateType}");
+                }
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Combat"))
+                {
+                    SetAllUnitsModes(BehaviorMode.Combat);
+                }
+                if (GUILayout.Button("OnDuty"))
+                {
+                    SetAllUnitsModes(BehaviorMode.OnDuty);
+                }
+                GUILayout.EndHorizontal();
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("OffDuty"))
+                {
+                    SetAllUnitsModes(BehaviorMode.OffDuty);
+                }
+                if (GUILayout.Button("Alert"))
+                {
+                    SetAllUnitsModes(BehaviorMode.Alert);
+                }
+                GUILayout.EndHorizontal();
             }
 
             GUILayout.EndArea();

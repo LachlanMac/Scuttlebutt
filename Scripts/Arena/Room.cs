@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
+using Pathfinding;
 
 namespace Starbelter.Arena
 {
@@ -13,6 +14,7 @@ namespace Starbelter.Arena
         [Header("Room Identity")]
         [SerializeField] private string roomId;
         [SerializeField] private RoomType roomType = RoomType.Generic;
+        [SerializeField] private RoomAccess accessRestriction = RoomAccess.All;
 
         [Header("Display")]
         [SerializeField] private string displayName;
@@ -30,7 +32,16 @@ namespace Starbelter.Arena
         // Properties
         public string RoomId => roomId;
         public RoomType Type => roomType;
+        public RoomAccess Access => accessRestriction;
         public string DisplayName => string.IsNullOrEmpty(displayName) ? roomType.ToString() : displayName;
+
+        /// <summary>
+        /// Check if a specific access level is allowed in this room.
+        /// </summary>
+        public bool AllowsAccess(RoomAccess access)
+        {
+            return (accessRestriction & access) != 0;
+        }
         public ArenaFloor ParentFloor => parentFloor;
         public bool IsInitialized => isInitialized;
         public int TileCount => roomTiles.Count;
@@ -187,21 +198,48 @@ namespace Starbelter.Arena
         }
 
         /// <summary>
-        /// Get a random tile in this room.
+        /// Get a random WALKABLE tile in this room.
+        /// Checks pathfinding graph to ensure tile is actually walkable.
         /// </summary>
         public Vector3Int GetRandomTile()
         {
             if (roomTiles.Count == 0)
                 return parentFloor.WorldToTile(transform.position);
 
-            int index = Random.Range(0, roomTiles.Count);
-            int i = 0;
-            foreach (var tile in roomTiles)
+            var graph = parentFloor?.Graph;
+
+            // Try up to 10 times to find a walkable tile
+            for (int attempt = 0; attempt < 10; attempt++)
             {
-                if (i == index) return tile;
-                i++;
+                int index = Random.Range(0, roomTiles.Count);
+                int i = 0;
+                Vector3Int selectedTile = default;
+
+                foreach (var tile in roomTiles)
+                {
+                    if (i == index)
+                    {
+                        selectedTile = tile;
+                        break;
+                    }
+                    i++;
+                }
+
+                // If no graph, just return the tile
+                if (graph == null)
+                    return selectedTile;
+
+                // Check if tile is walkable
+                Vector3 worldPos = parentFloor.TileToWorld(selectedTile);
+                var node = graph.GetNearest(worldPos, NearestNodeConstraint.None).node;
+
+                if (node != null && node.Walkable)
+                    return selectedTile;
             }
-            return parentFloor.WorldToTile(transform.position);
+
+            // Fallback: return any tile (shouldn't happen often)
+            Debug.LogWarning($"[Room] '{displayName}' couldn't find walkable tile after 10 attempts!");
+            return roomTiles.First();
         }
 
         /// <summary>
@@ -241,6 +279,15 @@ namespace Starbelter.Arena
         #endregion
 
 #if UNITY_EDITOR
+        private void OnValidate()
+        {
+            // Snap to 0.5 intervals
+            var pos = transform.localPosition;
+            pos.x = Mathf.Round(pos.x * 2f) / 2f;
+            pos.y = Mathf.Round(pos.y * 2f) / 2f;
+            transform.localPosition = pos;
+        }
+
         private void OnDrawGizmos()
         {
             if (!showGizmos) return;
@@ -271,19 +318,72 @@ namespace Starbelter.Arena
     public enum RoomType
     {
         Generic,
+
+        // Command
         Bridge,
+        CIC,                    // Combat Information Center
+        BriefingRoom,
+        ReadyRoom,              // Captain's office adjacent to bridge
+
+        // Quarters
+        CaptainsQuarters,
+        FirstOfficerQuarters,
+        OfficerQuarters,
+        EnlistedQuarters,
         Barracks,
-        MedBay,
+
+        // Operations
         Engineering,
+        ReactorRoom,
+        MachineShop,
+        LifeSupport,
+        ScienceLab,
+        Communications,
+
+        // Admin / Logistics
+        AdministrationOffice,
+        SupplyOffice,
+
+        // Combat/Security
         Armory,
+        Brig,
+        SecurityStation,
+        SquadBay,               // Marine planning/ready room
+
+        // Medical
+        MedBay,
+        Morgue,
+
+        // Crew Welfare
+        MessHall,
+        Gym,
+        Lounge,
+
+        // Logistics
         CargoHold,
+        StorageRoom,
+
+        // Access
         Hallway,
         Airlock,
         Hangar,
-        Quarters,
-        MessHall,
-        Brig,
-        ScienceLab,
-        LifeSupport
+        MaintenanceShaft
+    }
+
+    /// <summary>
+    /// Flags for who can access a room. Use for AI behavior and room restrictions.
+    /// </summary>
+    [System.Flags]
+    public enum RoomAccess
+    {
+        None = 0,
+        Officers = 1 << 0,      // 1
+        Enlisted = 1 << 1,      // 2
+        Pilots = 1 << 2,        // 4
+        Guests = 1 << 3,        // 8
+        Security = 1 << 4,      // 16
+        Medical = 1 << 5,       // 32
+        Engineering = 1 << 6,   // 64
+        All = ~0
     }
 }

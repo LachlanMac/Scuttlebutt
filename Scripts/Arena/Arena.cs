@@ -108,6 +108,9 @@ namespace Starbelter.Arena
 
             Debug.Log($"[Arena] Initializing arena '{arenaId}'...");
 
+            // Collapse floors to X=0 (allows horizontal spread in editor for easier editing)
+            CollapseFloors();
+
             // Find all floors in children
             floors.AddRange(GetComponentsInChildren<ArenaFloor>());
             floors.Sort((a, b) => a.FloorIndex.CompareTo(b.FloorIndex));
@@ -142,6 +145,23 @@ namespace Starbelter.Arena
             OnArenaInitialized?.Invoke(this);
 
             Debug.Log($"[Arena] Arena '{arenaId}' initialized with {floors.Count} floors");
+        }
+
+        /// <summary>
+        /// Collapse all ArenaFloor children to X=0.
+        /// Allows floors to be spread horizontally in editor for easier editing.
+        /// </summary>
+        private void CollapseFloors()
+        {
+            var floorComponents = GetComponentsInChildren<ArenaFloor>();
+            foreach (var floor in floorComponents)
+            {
+                var pos = floor.transform.localPosition;
+                if (pos.x != 0f)
+                {
+                    floor.transform.localPosition = new Vector3(0f, pos.y, pos.z);
+                }
+            }
         }
 
         #region Floor Access

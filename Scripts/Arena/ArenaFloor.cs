@@ -222,7 +222,7 @@ namespace Starbelter.Arena
                     }
                     else
                     {
-                        Debug.LogWarning($"[ArenaFloor] Tile {tile} claimed by multiple rooms!");
+                        Debug.LogWarning($"[ArenaFloor] Tile {tile} claimed by both '{tileToRoom[tile].name}' and '{room.name}'!");
                     }
                 }
             }
@@ -380,41 +380,99 @@ namespace Starbelter.Arena
         /// <summary>
         /// Mark nodes as unwalkable based on tilemap data.
         /// Walkable = on floor tilemap AND not on walls tilemap.
+        /// Walls ALWAYS override floor (if wall exists at position, it's unwalkable).
         /// </summary>
         private void ApplyTilemapWalkability()
         {
             if (floorGraph == null) return;
             if (floorTilemap == null && wallsTilemap == null) return;
 
-            int unwalkableCount = 0;
+            int noFloorCount = 0;
+            int wallBlockedCount = 0;
 
             floorGraph.GetNodes(node =>
             {
                 Vector3 worldPos = (Vector3)node.position;
-                Vector3Int tilePos = WorldToTile(worldPos);
 
                 bool isWalkable = true;
+                bool blockedByWall = false;
+                bool noFloorTile = false;
 
-                // Must be on floor tilemap (if we have one)
-                if (floorTilemap != null && !floorTilemap.HasTile(tilePos))
+                // Check walls FIRST - walls always block, regardless of floor
+                if (wallsTilemap != null)
                 {
-                    isWalkable = false;
+                    // Use walls tilemap's own coordinate conversion
+                    Vector3Int wallTilePos = wallsTilemap.WorldToCell(worldPos);
+                    if (wallsTilemap.HasTile(wallTilePos))
+                    {
+                        isWalkable = false;
+                        blockedByWall = true;
+                    }
                 }
 
-                // Must NOT be on walls tilemap
-                if (wallsTilemap != null && wallsTilemap.HasTile(tilePos))
+                // Only check floor if not already blocked by wall
+                if (isWalkable && floorTilemap != null)
                 {
-                    isWalkable = false;
+                    Vector3Int floorTilePos = floorTilemap.WorldToCell(worldPos);
+                    if (!floorTilemap.HasTile(floorTilePos))
+                    {
+                        isWalkable = false;
+                        noFloorTile = true;
+                    }
                 }
 
                 if (!isWalkable && node.Walkable)
                 {
                     node.Walkable = false;
-                    unwalkableCount++;
+                    if (blockedByWall) wallBlockedCount++;
+                    else if (noFloorTile) noFloorCount++;
                 }
             });
 
-            Debug.Log($"[ArenaFloor] Applied tilemap walkability: {unwalkableCount} nodes marked unwalkable");
+            Debug.Log($"[ArenaFloor] Applied tilemap walkability: {wallBlockedCount} blocked by walls, {noFloorCount} no floor tile");
+
+            // Debug: Print walkability grid (uncomment for debugging)
+            // DebugPrintWalkabilityGrid();
+        }
+
+        /// <summary>
+        /// Debug: Print walkability grid to log
+        /// </summary>
+        private void DebugPrintWalkabilityGrid()
+        {
+            if (floorGraph == null) return;
+
+            var bounds = Bounds;
+            int minX = Mathf.FloorToInt(bounds.min.x);
+            int maxX = Mathf.CeilToInt(bounds.max.x);
+            int minY = Mathf.FloorToInt(bounds.min.y);
+            int maxY = Mathf.CeilToInt(bounds.max.y);
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[ArenaFloor] === WALKABILITY GRID for {floorId} ===");
+            sb.AppendLine($"Bounds: X[{minX} to {maxX}], Y[{minY} to {maxY}]");
+
+            // Print from top to bottom (high Y to low Y)
+            for (int y = maxY; y >= minY; y--)
+            {
+                sb.Append($"Y{y,3}: ");
+                for (int x = minX; x <= maxX; x++)
+                {
+                    Vector3 worldPos = new Vector3(x + 0.5f, y + 0.5f, 0);
+                    var node = floorGraph.GetNearest(worldPos, NearestNodeConstraint.None).node;
+
+                    if (node == null)
+                        sb.Append("?");
+                    else if (node.Walkable)
+                        sb.Append(".");
+                    else
+                        sb.Append("#");
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine($"[ArenaFloor] === END GRID (. = walkable, # = blocked, ? = no node) ===");
+            Debug.Log(sb.ToString());
         }
 
         private void ConfigureGraph(GridGraph graph)
@@ -468,10 +526,52 @@ namespace Starbelter.Arena
 
             graph.center = bounds.center;
             graph.SetDimensions(width, depth, nodeSize);
-            graph.collision.mask = obstacleLayer;
+
+            // Build collision mask for THIS floor only (plus FloorShared)
+            // This prevents doors/obstacles on other floors from affecting this floor's graph
+            LayerMask floorCollisionMask = BuildFloorCollisionMask();
+            graph.collision.mask = floorCollisionMask;
             graph.collision.diameter = nodeSize * collisionDiameterMultiplier;
 
-            Debug.Log($"[ArenaFloor] Graph configured: {width}x{depth} nodes, center={bounds.center}");
+            Debug.Log($"[ArenaFloor] Graph configured: {width}x{depth} nodes, center={bounds.center}, collisionMask={floorCollisionMask.value}");
+        }
+
+        /// <summary>
+        /// Build a collision mask that only includes this floor's layer and FloorShared.
+        /// This prevents obstacles on other floors from affecting this floor's pathfinding.
+        /// </summary>
+        private LayerMask BuildFloorCollisionMask()
+        {
+            int mask = 0;
+
+            // Include this floor's layer
+            if (floorLayer >= 0)
+            {
+                mask |= (1 << floorLayer);
+            }
+
+            // Include FloorShared layer
+            int sharedLayer = UnityEngine.LayerMask.NameToLayer("FloorShared");
+            if (sharedLayer >= 0)
+            {
+                mask |= (1 << sharedLayer);
+            }
+
+            // If we couldn't find floor layers, fall back to obstacleLayer (but warn)
+            if (mask == 0)
+            {
+                Debug.LogWarning($"[ArenaFloor] Could not build floor-specific collision mask for '{floorId}', using obstacleLayer fallback");
+                return obstacleLayer;
+            }
+
+            // Also include Default layer for general obstacles
+            int defaultLayer = UnityEngine.LayerMask.NameToLayer("Default");
+            if (defaultLayer >= 0)
+            {
+                mask |= (1 << defaultLayer);
+            }
+
+            return mask;
         }
 
         public void CleanupGraph()

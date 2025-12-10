@@ -6,8 +6,8 @@ using Starbelter.AI;
 namespace Starbelter.Arena
 {
     /// <summary>
-    /// Multi-floor elevator that creates pathfinding links between all connected floors.
-    /// Place ElevatorStop transforms on each floor, and this component auto-generates NodeLink2 connections.
+    /// Multi-floor elevator that handles unit transitions between floors.
+    /// Uses manual two-phase pathing: units path to elevator, wait, then teleport to target floor.
     /// </summary>
     public class Elevator : MonoBehaviour
     {
@@ -19,14 +19,8 @@ namespace Starbelter.Arena
         [SerializeField] private List<Transform> stops = new List<Transform>();
 
         [Header("Settings")]
-        [Tooltip("Base cost for traveling one floor")]
-        [SerializeField] private float costPerFloor = 1f;
-
-        [Tooltip("Time to travel one floor (for animations/waiting)")]
-        [SerializeField] private float timePerFloor = 1f;
-
-        [Tooltip("If true, all connections are bidirectional")]
-        [SerializeField] private bool bidirectional = true;
+        [Tooltip("Time to travel one floor (seconds)")]
+        [SerializeField] private float timePerFloor = 2f;
 
         [Header("Visuals")]
         [Tooltip("Layer name for elevator visuals (should be in all floor culling masks)")]
@@ -38,13 +32,13 @@ namespace Starbelter.Arena
         // Runtime
         private Arena parentArena;
         private List<ElevatorStopData> stopData = new List<ElevatorStopData>();
-        private List<NodeLink2> generatedLinks = new List<NodeLink2>();
         private bool isInitialized;
 
         // Properties
         public string ElevatorId => elevatorId;
         public int StopCount => stops.Count;
         public bool IsInitialized => isInitialized;
+        public float TimePerFloor => timePerFloor;
 
         private struct ElevatorStopData
         {
@@ -70,26 +64,23 @@ namespace Starbelter.Arena
 
             parentArena = arena;
 
-            // Apply shared layer for multi-floor visibility
+            // Build stop data FIRST - before ApplySharedLayer overwrites the floor layers!
+            BuildStopData();
+
+            // Apply shared layer for multi-floor visibility (after we've read the stop layers)
             if (applySharedLayer)
             {
                 ApplySharedLayer();
             }
 
-            // Build stop data with floor references
-            BuildStopData();
-
             if (stopData.Count < 2)
             {
-                Debug.LogWarning($"[Elevator] '{elevatorId}' has fewer than 2 valid stops. No links created.");
+                Debug.LogWarning($"[Elevator] '{elevatorId}' has fewer than 2 valid stops.");
                 return;
             }
 
-            // Create NodeLink2 between all pairs
-            CreateNodeLinks();
-
             isInitialized = true;
-            Debug.Log($"[Elevator] '{elevatorId}' initialized with {stopData.Count} stops, {generatedLinks.Count} links");
+            Debug.Log($"[Elevator] '{elevatorId}' initialized with {stopData.Count} stops");
         }
 
         private void ApplySharedLayer()
@@ -125,7 +116,7 @@ namespace Starbelter.Arena
                 ArenaFloor floor = DetectFloorForStop(stop);
                 if (floor == null)
                 {
-                    Debug.LogWarning($"[Elevator] Stop '{stop.name}' could not determine floor. " +
+                    Debug.LogWarning($"[Elevator] Stop '{stop.name}' at {stop.position} could not determine floor. " +
                         "Make it a child of an ArenaFloor, or set its layer to Floor0/Floor1/etc.");
                     continue;
                 }
@@ -144,25 +135,18 @@ namespace Starbelter.Arena
 
         /// <summary>
         /// Detect which floor a stop belongs to.
-        /// Priority: 1) Parent ArenaFloor, 2) Layer name, 3) Position bounds
+        /// Priority: 1) Layer name, 2) Parent ArenaFloor, 3) Position bounds
         /// </summary>
         private ArenaFloor DetectFloorForStop(Transform stop)
         {
-            // Method 1: Check if stop is a child of an ArenaFloor
-            var parentFloor = stop.GetComponentInParent<ArenaFloor>();
-            if (parentFloor != null)
-            {
-                return parentFloor;
-            }
-
-            // Method 2: Check layer name (e.g., "Floor2" → floorIndex 2)
+            // Method 1: Check layer name (e.g., "Floor0", "Floor1")
             string layerName = LayerMask.LayerToName(stop.gameObject.layer);
-            if (layerName.StartsWith("Floor") && layerName.Length > 5)
+
+            if (layerName.StartsWith("Floor"))
             {
-                string indexStr = layerName.Substring(5); // "Floor2" → "2"
+                string indexStr = layerName.Substring(5);
                 if (int.TryParse(indexStr, out int floorIndex))
                 {
-                    // Find the ArenaFloor with this index
                     foreach (var floor in parentArena.Floors)
                     {
                         if (floor.FloorIndex == floorIndex)
@@ -173,54 +157,19 @@ namespace Starbelter.Arena
                 }
             }
 
-            // Method 3: Fall back to position-based (works if floors don't overlap)
+            // Method 2: Check if stop is a child of an ArenaFloor
+            var parentFloor = stop.GetComponentInParent<ArenaFloor>();
+            if (parentFloor != null)
+            {
+                return parentFloor;
+            }
+
+            // Method 3: Fall back to position-based
             return parentArena.GetFloorAtPosition(stop.position);
         }
 
-        private void CreateNodeLinks()
-        {
-            generatedLinks.Clear();
-
-            // Create links between all pairs of stops
-            for (int i = 0; i < stopData.Count; i++)
-            {
-                for (int j = i + 1; j < stopData.Count; j++)
-                {
-                    var from = stopData[i];
-                    var to = stopData[j];
-
-                    // Calculate cost based on floor distance
-                    int floorDistance = Mathf.Abs(to.FloorIndex - from.FloorIndex);
-                    float cost = costPerFloor * floorDistance;
-
-                    // Create the link
-                    var link = CreateLink(from, to, cost);
-                    if (link != null)
-                    {
-                        generatedLinks.Add(link);
-                    }
-                }
-            }
-        }
-
-        private NodeLink2 CreateLink(ElevatorStopData from, ElevatorStopData to, float cost)
-        {
-            // Create a child GameObject for this link
-            var linkObj = new GameObject($"ElevatorLink_{from.FloorIndex}_to_{to.FloorIndex}");
-            linkObj.transform.SetParent(transform);
-            linkObj.transform.position = from.Transform.position;
-
-            // Add NodeLink2
-            var nodeLink = linkObj.AddComponent<NodeLink2>();
-            nodeLink.end = to.Transform;
-            nodeLink.oneWay = !bidirectional;
-            nodeLink.costFactor = cost;
-
-            return nodeLink;
-        }
-
         /// <summary>
-        /// Get the stop transform for a specific floor.
+        /// Get the stop transform for a specific floor index.
         /// </summary>
         public Transform GetStopForFloor(int floorIndex)
         {
@@ -246,6 +195,20 @@ namespace Starbelter.Arena
         }
 
         /// <summary>
+        /// Check if this elevator connects two floors.
+        /// </summary>
+        public bool ConnectsFloors(ArenaFloor floorA, ArenaFloor floorB)
+        {
+            bool hasA = false, hasB = false;
+            foreach (var stop in stopData)
+            {
+                if (stop.Floor == floorA) hasA = true;
+                if (stop.Floor == floorB) hasB = true;
+            }
+            return hasA && hasB;
+        }
+
+        /// <summary>
         /// Calculate travel time between two floors.
         /// </summary>
         public float GetTravelTime(int fromFloorIndex, int toFloorIndex)
@@ -254,7 +217,17 @@ namespace Starbelter.Arena
         }
 
         /// <summary>
+        /// Calculate travel time between two floors.
+        /// </summary>
+        public float GetTravelTime(ArenaFloor fromFloor, ArenaFloor toFloor)
+        {
+            if (fromFloor == null || toFloor == null) return timePerFloor;
+            return GetTravelTime(fromFloor.FloorIndex, toFloor.FloorIndex);
+        }
+
+        /// <summary>
         /// Transition a unit to a specific floor via this elevator.
+        /// Call this after the unit has waited at the elevator.
         /// </summary>
         public void TransitionUnit(UnitController unit, ArenaFloor targetFloor)
         {
@@ -267,29 +240,36 @@ namespace Starbelter.Arena
                 return;
             }
 
-            // Move unit to target position
-            unit.transform.position = targetStop.position;
+            // Get source floor for logging
+            var sourceFloor = parentArena?.GetFloorForUnit(unit);
+            string sourceFloorId = sourceFloor?.FloorId ?? "unknown";
+
+            // Move unit to target position, adjusting Z to match target floor's graph
+            Vector3 newPos = targetStop.position;
+            if (targetFloor.Graph != null)
+            {
+                var gridGraph = targetFloor.Graph as GridGraph;
+                if (gridGraph != null)
+                {
+                    newPos.z = gridGraph.center.z;
+                }
+            }
+            unit.transform.position = newPos;
 
             // Update floor registration
             parentArena.SetUnitFloor(unit, targetFloor);
 
-            // Update tile occupancy
-            targetFloor.OccupyTile(unit.gameObject, targetStop.position);
+            // Update tile occupancy on new floor
+            targetFloor.OccupyTile(unit.gameObject, newPos);
 
-            Debug.Log($"[Elevator] Unit '{unit.name}' moved to {targetFloor.FloorId}");
-        }
-
-        private void OnDestroy()
-        {
-            // Clean up generated link objects
-            foreach (var link in generatedLinks)
+            // Change unit's layer to target floor
+            int targetLayer = targetFloor.Layer;
+            if (targetLayer >= 0)
             {
-                if (link != null)
-                {
-                    Destroy(link.gameObject);
-                }
+                SetLayerRecursive(unit.gameObject, targetLayer);
             }
-            generatedLinks.Clear();
+
+            Debug.Log($"[Elevator] '{unit.name}' transitioned {sourceFloorId} -> {targetFloor.FloorId}");
         }
 
 #if UNITY_EDITOR
@@ -320,9 +300,8 @@ namespace Starbelter.Arena
         {
             if (stops.Count == 0) return;
 
-            // Draw elevator ID
             Vector3 labelPos = transform.position;
-            if (stops.Count > 0 && stops[0] != null)
+            if (stops[0] != null)
             {
                 labelPos = stops[0].position + Vector3.up * 0.5f;
             }

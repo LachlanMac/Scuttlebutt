@@ -8,15 +8,36 @@ using Starbelter.Pathfinding;
 namespace Starbelter.AI
 {
     /// <summary>
-    /// The 5 core states a unit can be in.
+    /// All possible states across all behavior modes.
+    /// States are prefixed by their mode for clarity.
     /// </summary>
     public enum UnitStateType
     {
-        Ready,      // No threats, holding position, high alertness
-        Combat,     // Engaged with enemy, shooting
-        Moving,     // Relocating to new position
-        Pinned,     // Under heavy threat, ducking behind cover
-        Reloading   // Reloading weapon, vulnerable
+        // === COMBAT MODE STATES ===
+        // (Original states kept for backward compatibility)
+        Ready,      // Combat: No immediate threats, holding position, high alertness
+        Combat,     // Combat: Engaged with enemy, shooting
+        Moving,     // Combat: Tactical relocation (threat-aware)
+        Pinned,     // Combat: Under heavy threat, ducking behind cover
+        Reloading,  // Combat: Reloading weapon, vulnerable
+
+        // === ON DUTY MODE STATES ===
+        OnDuty_Work,        // Working at assigned station/task
+        OnDuty_Patrol,      // Walking patrol route
+        OnDuty_Guard,       // Stationary guard duty
+        OnDuty_StandWatch,  // Watching a specific area
+
+        // === OFF DUTY MODE STATES ===
+        OffDuty_Idle,       // Standing around, relaxed
+        OffDuty_Wander,     // Casually walking around
+        OffDuty_Socialize,  // Interacting with other units
+        OffDuty_Rest,       // Resting/sleeping
+
+        // === ALERT MODE STATES ===
+        Alert_Investigate,  // Moving to investigate something suspicious
+        Alert_Search,       // Actively searching an area
+        Alert_Regroup,      // Regrouping with allies
+        Alert_Report        // Reporting findings
     }
 
     /// <summary>
@@ -68,6 +89,23 @@ namespace Starbelter.AI
         private UnitState currentState;
         private UnitStateType currentStateType;
         private float stateEnterTime;
+
+        // === BEHAVIOR MODE ===
+        private BehaviorMode currentMode = BehaviorMode.Combat;
+        private static readonly Dictionary<BehaviorMode, HashSet<UnitStateType>> validStatesPerMode = new Dictionary<BehaviorMode, HashSet<UnitStateType>>
+        {
+            { BehaviorMode.Combat, new HashSet<UnitStateType> { UnitStateType.Ready, UnitStateType.Combat, UnitStateType.Moving, UnitStateType.Pinned, UnitStateType.Reloading } },
+            { BehaviorMode.OnDuty, new HashSet<UnitStateType> { UnitStateType.OnDuty_Work, UnitStateType.OnDuty_Patrol, UnitStateType.OnDuty_Guard, UnitStateType.OnDuty_StandWatch } },
+            { BehaviorMode.OffDuty, new HashSet<UnitStateType> { UnitStateType.OffDuty_Idle, UnitStateType.OffDuty_Wander, UnitStateType.OffDuty_Socialize, UnitStateType.OffDuty_Rest } },
+            { BehaviorMode.Alert, new HashSet<UnitStateType> { UnitStateType.Alert_Investigate, UnitStateType.Alert_Search, UnitStateType.Alert_Regroup, UnitStateType.Alert_Report } }
+        };
+        private static readonly Dictionary<BehaviorMode, UnitStateType> defaultStatePerMode = new Dictionary<BehaviorMode, UnitStateType>
+        {
+            { BehaviorMode.Combat, UnitStateType.Ready },
+            { BehaviorMode.OnDuty, UnitStateType.OnDuty_Patrol },   // Default to patrol (Work not yet implemented)
+            { BehaviorMode.OffDuty, UnitStateType.OffDuty_Idle },
+            { BehaviorMode.Alert, UnitStateType.Alert_Investigate }
+        };
 
         // === SQUAD ===
         private SquadController squad;
@@ -140,6 +178,7 @@ namespace Starbelter.AI
         public bool ShouldUseThreatAwarePath => useThreatAwarePath;
         public bool CanShoot => Time.time - lastFireTime >= 1f / fireRate && !NeedsReload;
         public UnitStateType CurrentStateType => currentStateType;
+        public BehaviorMode CurrentMode => currentMode;
         public bool IsStealthed => isStealthed;
 
         /// <summary>
@@ -340,11 +379,30 @@ namespace Starbelter.AI
         {
             states = new Dictionary<UnitStateType, UnitState>
             {
+                // === COMBAT MODE STATES ===
                 { UnitStateType.Ready, new ReadyState() },
                 { UnitStateType.Combat, new CombatState() },
                 { UnitStateType.Moving, new MovingState() },
                 { UnitStateType.Pinned, new PinnedState() },
-                { UnitStateType.Reloading, new ReloadState() }
+                { UnitStateType.Reloading, new ReloadState() },
+
+                // === ON DUTY MODE STATES ===
+                { UnitStateType.OnDuty_Patrol, new OnDutyPatrolState() },
+                { UnitStateType.OnDuty_Guard, new OnDutyGuardState() },
+                // { UnitStateType.OnDuty_Work, new OnDutyWorkState() },         // TODO
+                // { UnitStateType.OnDuty_StandWatch, new OnDutyStandWatchState() }, // TODO
+
+                // === OFF DUTY MODE STATES ===
+                { UnitStateType.OffDuty_Idle, new OffDutyIdleState() },
+                { UnitStateType.OffDuty_Wander, new OffDutyWanderState() },
+                // { UnitStateType.OffDuty_Socialize, new OffDutySocializeState() }, // TODO
+                // { UnitStateType.OffDuty_Rest, new OffDutyRestState() },           // TODO
+
+                // === ALERT MODE STATES ===
+                { UnitStateType.Alert_Investigate, new AlertInvestigateState() },
+                { UnitStateType.Alert_Search, new AlertSearchState() },
+                // { UnitStateType.Alert_Regroup, new AlertRegroupState() },   // TODO
+                // { UnitStateType.Alert_Report, new AlertReportState() },     // TODO
             };
         }
 
@@ -364,6 +422,16 @@ namespace Starbelter.AI
         {
             if (isDestroyed || IsDead) return;
 
+            // Check if state exists in dictionary
+            if (!states.ContainsKey(newState))
+            {
+                Debug.LogWarning($"[{name}] State {newState} not registered!");
+                return;
+            }
+
+            // Skip if already in this state
+            if (currentStateType == newState) return;
+
             string oldState = currentStateType.ToString();
 
             currentState?.Exit();
@@ -375,6 +443,44 @@ namespace Starbelter.AI
             stateEnterTime = Time.time;
 
             Debug.Log($"[{name}] {oldState} -> {newState} | {GetStatusInfo()}");
+        }
+
+        /// <summary>
+        /// Change the behavior mode. Transitions to the default state for that mode.
+        /// </summary>
+        public void ChangeBehaviorMode(BehaviorMode newMode)
+        {
+            if (isDestroyed || IsDead) return;
+            if (currentMode == newMode) return;
+
+            BehaviorMode oldMode = currentMode;
+            currentMode = newMode;
+
+            // Get default state for new mode
+            UnitStateType defaultState = defaultStatePerMode[newMode];
+
+            Debug.Log($"[{name}] Mode: {oldMode} -> {newMode}");
+
+            // Transition to default state for this mode
+            ChangeState(defaultState);
+        }
+
+        /// <summary>
+        /// Check if a state is valid for the current behavior mode.
+        /// </summary>
+        public bool IsStateValidForCurrentMode(UnitStateType state)
+        {
+            if (!validStatesPerMode.TryGetValue(currentMode, out var validStates))
+                return false;
+            return validStates.Contains(state);
+        }
+
+        /// <summary>
+        /// Get the default state for a behavior mode.
+        /// </summary>
+        public UnitStateType GetDefaultStateForMode(BehaviorMode mode)
+        {
+            return defaultStatePerMode.TryGetValue(mode, out var state) ? state : UnitStateType.Ready;
         }
 
         /// <summary>
@@ -989,6 +1095,43 @@ namespace Starbelter.AI
         }
 
         public bool HasArrivedAtDestination => !movement.IsMoving;
+
+        /// <summary>
+        /// Move to a destination. Sets up pending destination and initiates movement.
+        /// </summary>
+        /// <param name="destination">World position to move to</param>
+        /// <param name="useThreatAware">If true, uses threat-aware pathfinding (for combat)</param>
+        public void MoveTo(Vector3 destination, bool useThreatAware = false)
+        {
+            pendingDestination = destination;
+            hasPendingDestination = true;
+            useThreatAwarePath = useThreatAware;
+
+            if (useThreatAware)
+            {
+                StartThreatAwareMove();
+            }
+            else
+            {
+                StartMoving();
+            }
+        }
+
+        /// <summary>
+        /// Set the direction the unit is facing (for visuals/aiming).
+        /// </summary>
+        public void SetFacingDirection(Vector2 direction)
+        {
+            if (direction.sqrMagnitude > 0.01f)
+            {
+                // Store facing direction for use by animation/sprite systems
+                // This could update a sprite renderer flip, animator parameter, etc.
+                lastKnownDirection = direction.normalized;
+            }
+        }
+
+        private Vector2 lastKnownDirection = Vector2.right;
+        public Vector2 FacingDirection => lastKnownDirection;
 
         // === COMBAT ===
 

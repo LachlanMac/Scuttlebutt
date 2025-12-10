@@ -287,8 +287,8 @@ namespace Starbelter.Pathfinding
                 return referenceTilemap.GetCellCenterWorld(tilePosition);
             }
 
-            // Fallback: assume 1x1 tiles
-            return new Vector3(tilePosition.x, tilePosition.y, 0);
+            // Fallback: assume 1x1 tiles centered at 0.5 offset
+            return new Vector3(tilePosition.x + 0.5f, tilePosition.y + 0.5f, 0);
         }
 
         /// <summary>

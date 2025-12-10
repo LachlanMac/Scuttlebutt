@@ -29,11 +29,10 @@ namespace Starbelter.Combat
             {
                 character = new Character(
                     sourceCharacter.Name,
-                    sourceCharacter.Vitality,
+                    sourceCharacter.Fitness,
                     sourceCharacter.Accuracy,
-                    sourceCharacter.Reflex,
+                    sourceCharacter.Reflexes,
                     sourceCharacter.Bravery,
-                    sourceCharacter.Agility,
                     sourceCharacter.Perception,
                     sourceCharacter.Stealth
                 );

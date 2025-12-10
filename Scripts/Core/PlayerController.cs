@@ -56,17 +56,23 @@ namespace Starbelter.Core
                 FirstName = playerName,
                 LastName = "",
                 IsOfficer = false,
-                EnlistedRank = MarineEnlistedRank.Sergeant,
+                Branch = ServiceBranch.Marine,
+                Rank = 5, // Sergeant (E-5)
                 Specialization = Specialization.Rifleman,
+                Profession = ProfessionCategory.Combat,
                 MainWeaponId = "assault_rifle",
-                Vitality = 12,
+                Fitness = 12,
                 Accuracy = 12,
-                Reflex = 12,
+                Reflexes = 12,
                 Bravery = 15,
-                Agility = 12,
                 Perception = 12,
                 Stealth = 10,
-                Tactics = 10
+                Tactics = 10,
+                Technical = 10,
+                Composure = 12,
+                Discipline = 12,
+                Logic = 10,
+                Communication = 10
             };
         }
 

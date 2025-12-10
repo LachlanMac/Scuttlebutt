@@ -77,6 +77,7 @@ namespace Starbelter.Arena
         /// </summary>
         public void UnregisterArena(Arena arena)
         {
+            
             if (arena == null) return;
 
             if (arenas.Remove(arena.ArenaId))

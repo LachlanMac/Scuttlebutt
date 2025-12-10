@@ -32,9 +32,14 @@ namespace Starbelter.Arena
         [Header("Visuals")]
         [SerializeField] private SpriteRenderer doorSprite;
 
+        [Header("Detection")]
+        [Tooltip("Layer that triggers the door (e.g., 'Unit')")]
+        [SerializeField] private string unitLayerName = "Unit";
+
         // Auto-detected colliders
         private Collider2D blockingCollider;   // isTrigger = false
         private Collider2D detectionTrigger;   // isTrigger = true
+        private int unitLayer = -1;            // Cached layer index
 
         // Auto-door state
         private int unitsInTrigger = 0;
@@ -58,6 +63,13 @@ namespace Starbelter.Arena
             if (string.IsNullOrEmpty(doorId))
             {
                 doorId = $"Door_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
+            }
+
+            // Cache unit layer
+            unitLayer = LayerMask.NameToLayer(unitLayerName);
+            if (unitLayer < 0)
+            {
+                Debug.LogWarning($"[Door] '{doorId}' - Layer '{unitLayerName}' not found!");
             }
 
             EnsureCollidersDetected();
@@ -111,7 +123,6 @@ namespace Starbelter.Arena
             }
 
             isInitialized = true;
-            Debug.Log($"[Door] Initialized '{doorId}' occupying {occupiedTiles.Count} tiles");
         }
 
         /// <summary>
@@ -119,7 +130,10 @@ namespace Starbelter.Arena
         /// </summary>
         public void FinalizeInitialization()
         {
-            if (isLocked && blockPathfindingWhenLocked)
+            // Always update pathfinding to ensure correct walkability.
+            // If unlocked: nodes should be walkable (even if collider blocked them during scan)
+            // If locked: nodes should be unwalkable
+            if (blockPathfindingWhenLocked)
             {
                 UpdatePathfinding();
             }
@@ -129,16 +143,6 @@ namespace Starbelter.Arena
         {
             occupiedTiles.Clear();
 
-            // Debug: show why auto-detect might not work
-            if (!autoDetectTiles)
-            {
-                Debug.Log($"[Door] '{doorId}' autoDetectTiles is OFF - using manual offsets");
-            }
-            else if (blockingCollider == null)
-            {
-                Debug.LogWarning($"[Door] '{doorId}' has no blocking collider for auto-detect");
-            }
-
             if (autoDetectTiles && blockingCollider != null)
             {
                 // Auto-detect from collider bounds
@@ -147,11 +151,14 @@ namespace Starbelter.Arena
                 Vector3Int minTile = parentFloor.WorldToTile(bounds.min);
                 Vector3Int maxTile = parentFloor.WorldToTile(bounds.max);
 
+                // Use Z from tilemap cell coordinate (not hardcoded 0)
+                int z = minTile.z;
+
                 for (int x = minTile.x; x <= maxTile.x; x++)
                 {
                     for (int y = minTile.y; y <= maxTile.y; y++)
                     {
-                        Vector3Int tile = new Vector3Int(x, y, 0);
+                        Vector3Int tile = new Vector3Int(x, y, z);
                         Vector3 tileCenter = parentFloor.TileToWorld(tile);
 
                         // Check if tile center is inside collider bounds
@@ -161,8 +168,6 @@ namespace Starbelter.Arena
                         }
                     }
                 }
-
-                Debug.Log($"[Door] '{doorId}' auto-detected {occupiedTiles.Count} tiles from collider bounds");
             }
             else
             {
@@ -230,8 +235,8 @@ namespace Starbelter.Arena
         /// </summary>
         public void OnUnitEnteredZone(Collider2D other)
         {
-            // Only react to units
-            if (other.GetComponentInParent<Starbelter.AI.UnitController>() == null)
+            // Only react to colliders on the Unit layer (not perception triggers, etc.)
+            if (other.gameObject.layer != unitLayer)
                 return;
 
             unitsInTrigger++;
@@ -247,7 +252,8 @@ namespace Starbelter.Arena
         /// </summary>
         public void OnUnitExitedZone(Collider2D other)
         {
-            if (other.GetComponentInParent<Starbelter.AI.UnitController>() == null)
+            // Only react to colliders on the Unit layer
+            if (other.gameObject.layer != unitLayer)
                 return;
 
             unitsInTrigger = Mathf.Max(0, unitsInTrigger - 1);
@@ -269,8 +275,6 @@ namespace Starbelter.Arena
             isOpen = true;
             UpdateVisuals();
             UpdatePathfinding();
-
-            Debug.Log($"[Door] '{doorId}' opened");
         }
 
         private void CloseDoor()
@@ -280,8 +284,6 @@ namespace Starbelter.Arena
             isOpen = false;
             UpdateVisuals();
             UpdatePathfinding();
-
-            Debug.Log($"[Door] '{doorId}' closed");
         }
 
         #endregion
@@ -290,21 +292,27 @@ namespace Starbelter.Arena
         {
             if (AstarPath.active == null) return;
             if (!blockPathfindingWhenLocked) return;
+            if (parentFloor == null || parentFloor.Graph == null) return;
 
-            // Calculate bounds for the door tiles
-            Bounds bounds = CalculateDoorBounds();
-
-            // Walkable when: unlocked AND open (or just unlocked for pathfinding planning)
-            // For pathfinding, we treat unlocked doors as walkable so units can path through them
-            // The door will open automatically when they approach
+            // Walkable when: unlocked (units can path through, door opens automatically)
             bool walkable = !isLocked;
 
-            // Create graph update
-            var guo = new GraphUpdateObject(bounds);
-            guo.modifyWalkability = true;
-            guo.setWalkability = walkable;
+            // Update ONLY the parent floor's graph nodes directly
+            // This prevents cross-floor bleeding where doors on Floor1 affect Floor0
+            var graph = parentFloor.Graph;
 
-            AstarPath.active.UpdateGraphs(guo);
+            foreach (var tile in occupiedTiles)
+            {
+                Vector3 worldPos = parentFloor.TileToWorld(tile);
+                var node = graph.GetNearest(worldPos, NearestNodeConstraint.None).node;
+
+                if (node != null)
+                {
+                    node.Walkable = walkable;
+                    // Reset tag to default (0) so path isn't blocked by tag mismatch
+                    node.Tag = 0;
+                }
+            }
         }
 
         private Bounds CalculateDoorBounds()
