@@ -356,7 +356,6 @@ namespace Starbelter.AI
                 radioMessageObject.SetActive(false);
             }
 
-            UpdateTeamColor();
             ChangeState(UnitStateType.Ready);
         }
 
@@ -1365,7 +1364,6 @@ namespace Starbelter.AI
             {
                 perceptionManager.MyTeam = newTeam;
             }
-            UpdateTeamColor();
         }
 
         public void SetSquad(SquadController newSquad, bool isLeader = false)
@@ -1404,19 +1402,6 @@ namespace Starbelter.AI
             isStealthed = stealthed;
         }
 
-        private void UpdateTeamColor()
-        {
-            var spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-            if (spriteRenderer == null) return;
-
-            spriteRenderer.color = team switch
-            {
-                Team.Federation => new Color(0.5f, 0.7f, 1f),
-                Team.Empire => new Color(1f, 0.5f, 0.5f),
-                Team.Neutral => Color.white,
-                _ => Color.white
-            };
-        }
 
         private void OnDeath()
         {

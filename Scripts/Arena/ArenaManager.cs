@@ -17,10 +17,6 @@ namespace Starbelter.Arena
         [Tooltip("The arena currently shown on main camera")]
         [SerializeField] private Arena focusedArena;
 
-        [Header("Arena Prefabs")]
-        [Tooltip("Default arena prefabs for spawning")]
-        [SerializeField] private List<GameObject> arenaPrefabs = new List<GameObject>();
-
         // Runtime state
         private Dictionary<string, Arena> arenas = new Dictionary<string, Arena>();
 
@@ -154,70 +150,6 @@ namespace Starbelter.Arena
 
         #endregion
 
-        #region Arena Spawning
-
-        /// <summary>
-        /// Spawn an arena from a prefab.
-        /// </summary>
-        public Arena SpawnArena(GameObject prefab, Vector3 position)
-        {
-            if (prefab == null)
-            {
-                Debug.LogError("[ArenaManager] Cannot spawn null prefab");
-                return null;
-            }
-
-            var instance = Instantiate(prefab, position, Quaternion.identity);
-            var arena = instance.GetComponent<Arena>();
-
-            if (arena == null)
-            {
-                Debug.LogError($"[ArenaManager] Prefab '{prefab.name}' has no Arena component");
-                Destroy(instance);
-                return null;
-            }
-
-            return arena;
-        }
-
-        /// <summary>
-        /// Spawn an arena by prefab index.
-        /// </summary>
-        public Arena SpawnArena(int prefabIndex, Vector3 position)
-        {
-            if (prefabIndex < 0 || prefabIndex >= arenaPrefabs.Count)
-            {
-                Debug.LogError($"[ArenaManager] Invalid prefab index: {prefabIndex}");
-                return null;
-            }
-
-            return SpawnArena(arenaPrefabs[prefabIndex], position);
-        }
-
-        /// <summary>
-        /// Destroy an arena.
-        /// </summary>
-        public void DestroyArena(Arena arena)
-        {
-            if (arena == null) return;
-
-            // Unregister happens in Arena.OnDestroy
-            Destroy(arena.gameObject);
-        }
-
-        /// <summary>
-        /// Destroy an arena by ID.
-        /// </summary>
-        public void DestroyArena(string arenaId)
-        {
-            if (arenas.TryGetValue(arenaId, out var arena))
-            {
-                DestroyArena(arena);
-            }
-        }
-
-        #endregion
-
         #region Transitions
 
         /// <summary>
@@ -276,15 +208,9 @@ namespace Starbelter.Arena
             // Unregister from arena
             fromArena?.UnregisterUnit(unit);
 
-            // Hand off to SpaceManager
-            if (SpaceManager.Instance != null)
-            {
-                SpaceManager.Instance.SpawnVesselFromArena(unit, exitPortal);
-            }
-            else
-            {
-                Debug.LogWarning("[ArenaManager] No SpaceManager to handle space transition");
-            }
+            // TODO: Hand off to SpaceManager.LaunchVesselFromArena()
+            // Requires a vessel prefab - needs to be determined based on unit type
+            Debug.Log($"[ArenaManager] Unit '{unit.name}' ready for space transition - needs vessel prefab");
 
             Debug.Log($"[ArenaManager] Unit '{unit.name}' transitioned to space from {fromArena?.ArenaId ?? "unknown"}");
         }

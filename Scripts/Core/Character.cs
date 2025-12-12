@@ -24,6 +24,15 @@ namespace Starbelter.Core
     }
 
     /// <summary>
+    /// Character gender for appearance selection.
+    /// </summary>
+    public enum Gender
+    {
+        Male,
+        Female
+    }
+
+    /// <summary>
     /// Broad profession categories that determine training and skill penalties.
     /// Characters acting outside their profession take penalties.
     /// </summary>
@@ -50,6 +59,10 @@ namespace Starbelter.Core
         public string FirstName;
         public string LastName;
         public string Callsign;
+        public Gender Gender;
+        public int SkinTone;
+        public int HairStyle;
+        public int HairColor;
 
         [Header("Service Record")]
         public ServiceBranch Branch;

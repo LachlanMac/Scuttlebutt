@@ -103,60 +103,33 @@ namespace Starbelter.Space
 
         #endregion
 
-        #region Spawning
+        #region Launch/Land
 
         /// <summary>
-        /// Spawn a vessel in space.
+        /// Launch a vessel from an arena (e.g., fighter launching from hangar).
+        /// Uses WorldManager for spawning.
         /// </summary>
-        public SpaceVessel SpawnVessel(GameObject prefab, Vector2 position, float heading = 0f)
+        public void LaunchVesselFromArena(UnitController unit, Portal exitPortal, GameObject vesselPrefab)
         {
-            if (prefab == null)
-            {
-                Debug.LogError("[SpaceManager] Cannot spawn null prefab");
-                return null;
-            }
-
-            var instance = Instantiate(prefab, (Vector3)position, Quaternion.Euler(0, 0, heading), spaceRoot);
-            var vessel = instance.GetComponent<SpaceVessel>();
-
-            if (vessel == null)
-            {
-                Debug.LogError($"[SpaceManager] Prefab '{prefab.name}' has no SpaceVessel component");
-                Destroy(instance);
-                return null;
-            }
-
-            RegisterVessel(vessel);
-            OnVesselSpawned?.Invoke(vessel);
-
-            return vessel;
-        }
-
-        /// <summary>
-        /// Spawn a vessel from an arena (e.g., fighter launching from hangar).
-        /// </summary>
-        public void SpawnVesselFromArena(UnitController unit, Portal exitPortal)
-        {
-            // This is a stub - needs full implementation
-            // For now, just log and handle the transition conceptually
-
             if (exitPortal == null || exitPortal.OwnerArena == null)
             {
-                Debug.LogError("[SpaceManager] Invalid exit portal for space spawn");
+                Debug.LogError("[SpaceManager] Invalid exit portal for launch");
                 return;
             }
 
             // Get the parent ship's space position
-            // For now, just use portal position + offset
             Vector2 spacePosition = (Vector2)exitPortal.transform.position + exitPortal.SpaceExitOffset;
 
-            Debug.Log($"[SpaceManager] Unit '{unit.name}' would spawn at space position {spacePosition}");
-
-            // TODO:
-            // 1. Find or create the SpaceVessel prefab for this unit type
-            // 2. Spawn the vessel at the calculated position
-            // 3. Transfer unit control to vessel (or disable unit and enable vessel)
-            // 4. Apply parent ship's velocity if applicable
+            // Use WorldManager to spawn
+            if (WorldManager.Instance != null)
+            {
+                var entity = WorldManager.Instance.SpawnSpaceOnly(vesselPrefab, spacePosition, unit.name);
+                Debug.Log($"[SpaceManager] Launched '{unit.name}' at {spacePosition}");
+            }
+            else
+            {
+                Debug.LogError("[SpaceManager] WorldManager not available for launching vessel");
+            }
         }
 
         #endregion

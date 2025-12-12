@@ -66,11 +66,19 @@ namespace Starbelter.Core
             // Determine weapon
             string weaponId = GetWeaponForRole(specialization, isOfficer);
 
+            int skinTone = rng.Next(0, 8);  // 8 skin tones
+            int hairStyle = rng.Next(0, 2); // 2 hair styles per gender
+            int hairColor = rng.Next(0, 8); // 8 hair colors
+
             var character = new Character
             {
                 FirstName = firstName,
                 LastName = lastName,
                 Callsign = callsign,
+                Gender = isFemale ? Gender.Female : Gender.Male,
+                SkinTone = skinTone,
+                HairStyle = hairStyle,
+                HairColor = hairColor,
                 Branch = branch,
                 IsOfficer = isOfficer,
                 Rank = rank,

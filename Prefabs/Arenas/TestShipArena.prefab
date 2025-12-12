@@ -1334,6 +1334,8 @@ GameObject:
   m_Component:
   - component: {fileID: 8438918962477239869}
   - component: {fileID: 8911343354440809575}
+  - component: {fileID: 6902921195440121871}
+  - component: {fileID: 5982500126323582315}
   m_Layer: 0
   m_Name: TestShipArena
   m_TagString: Untagged
@@ -1354,13 +1356,10 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 5745102218815054962}
-  - {fileID: 7943440541701832169}
   - {fileID: 3600197311150149472}
   - {fileID: 9204147218198348030}
   - {fileID: 1047725163528169573}
   - {fileID: 954698484910134226}
-  - {fileID: 8435932702454949844}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &8911343354440809575
@@ -1378,6 +1377,39 @@ MonoBehaviour:
   arenaId: TESTSHIP_ID
   arenaType: 0
   initializeOnAwake: 1
+--- !u!114 &6902921195440121871
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2437450995399799600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 64923b611a9051d4a99be76e4a1f8a06, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Core.CrewManager
+  unitPrefab: {fileID: 1548625376942975298, guid: faaf1e82157ea4e4cb3efc0228f1675f, type: 3}
+  autoGenerateOnStart: 1
+  logRosterOnGenerate: 1
+  totalCrew: 0
+  officerCount: 0
+  enlistedCount: 0
+  marineCount: 0
+  navyCount: 0
+--- !u!114 &5982500126323582315
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2437450995399799600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0de4bdfaf57431449a9b465d5dd4467d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Starbelter.Arena.ArenaSpaceLinker
+  spaceViewPrefab: {fileID: 6657591666308239558, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
 --- !u!1 &2516008162705728289
 GameObject:
   m_ObjectHideFlags: 0
@@ -48131,37 +48163,6 @@ MonoBehaviour:
   displayName: 
   showGizmos: 1
   gizmoColor: {r: 1, g: 0.7879015, b: 0, a: 0.2}
---- !u!1 &8227113698771551292
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 8435932702454949844}
-  m_Layer: 0
-  m_Name: WTF
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &8435932702454949844
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8227113698771551292}
-  serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -14, y: -15, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 8438918962477239869}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8229435683510468504
 GameObject:
   m_ObjectHideFlags: 0
@@ -48278,37 +48279,6 @@ MonoBehaviour:
   displayName: Barracks eee
   showGizmos: 1
   gizmoColor: {r: 0.96098113, g: 1, b: 0, a: 0.2}
---- !u!1 &8271094805216975004
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 5745102218815054962}
-  m_Layer: 0
-  m_Name: Objects
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &5745102218815054962
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8271094805216975004}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 8438918962477239869}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8360414789821440332
 GameObject:
   m_ObjectHideFlags: 0
@@ -49101,72 +49071,6 @@ PrefabInstance:
 Transform:
   m_CorrespondingSourceObject: {fileID: 8474216037303261670, guid: 124bc5ef94a5e7d4fb7c4e1fa74d82e0, type: 3}
   m_PrefabInstance: {fileID: 156191810024763652}
-  m_PrefabAsset: {fileID: 0}
---- !u!1001 &180040815935277815
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    serializedVersion: 3
-    m_TransformParent: {fileID: 8438918962477239869}
-    m_Modifications:
-    - target: {fileID: 6657591666308239558, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_Name
-      value: BattleShipA_PREFAB
-      objectReference: {fileID: 0}
-    - target: {fileID: 6657591666308239558, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_IsActive
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalPosition.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalRotation.x
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalRotation.y
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalRotation.z
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-    m_RemovedGameObjects: []
-    m_AddedGameObjects: []
-    m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
---- !u!4 &7943440541701832169 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 7801192491905333022, guid: 874b73e95dc5ca54d8e75de458f940b3, type: 3}
-  m_PrefabInstance: {fileID: 180040815935277815}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &191274118670589185
 PrefabInstance:

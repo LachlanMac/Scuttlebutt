@@ -2,15 +2,22 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Starbelter.AI;
+using Starbelter.Arena;
+using Starbelter.Unit;
 
 namespace Starbelter.Core
 {
     /// <summary>
     /// Manages all crew members on the ship.
-    /// Finds beds, generates crew, provides lookups.
+    /// Finds beds, generates crew, spawns units, provides lookups.
     /// </summary>
     public class CrewManager : MonoBehaviour
     {
+        [Header("Prefabs")]
+        [Tooltip("Unit prefab to spawn for each crew member")]
+        [SerializeField] private GameObject unitPrefab;
+
         [Header("Settings")]
         [Tooltip("Auto-find all beds and generate crew on Start")]
         [SerializeField] private bool autoGenerateOnStart = true;
@@ -30,11 +37,12 @@ namespace Starbelter.Core
         private List<CrewMember> allCrew = new List<CrewMember>();
         private Dictionary<Job, List<CrewMember>> crewByJob = new Dictionary<Job, List<CrewMember>>();
         private Dictionary<Shift, List<CrewMember>> crewByShift = new Dictionary<Shift, List<CrewMember>>();
+        private Dictionary<CrewMember, UnitController> spawnedUnits = new Dictionary<CrewMember, UnitController>();
+        private Dictionary<Bed, ArenaFloor> bedFloors = new Dictionary<Bed, ArenaFloor>();
 
-        // Reference to the ship root (auto-detected or manually assigned)
-        [Header("Ship Reference")]
-        [Tooltip("Root transform of this ship. If not set, uses this GameObject's root parent.")]
-        [SerializeField] private Transform shipRoot;
+        // Cached reference to ship root
+        private Transform shipRoot;
+        private Starbelter.Arena.Arena arena;
 
         /// <summary>
         /// The ship this CrewManager belongs to.
@@ -43,11 +51,8 @@ namespace Starbelter.Core
 
         private void Awake()
         {
-            // Auto-detect ship root if not assigned
-            if (shipRoot == null)
-            {
-                shipRoot = transform.root;
-            }
+            shipRoot = transform.root;
+            arena = GetComponentInParent<Starbelter.Arena.Arena>();
         }
 
         private void Start()
@@ -65,11 +70,12 @@ namespace Starbelter.Core
         }
 
         /// <summary>
-        /// Find all Bed components on this ship.
+        /// Find all Bed components on this ship and cache their floor references.
         /// </summary>
         public void FindAllBeds()
         {
             allBeds.Clear();
+            bedFloors.Clear();
 
             if (shipRoot == null)
             {
@@ -79,17 +85,29 @@ namespace Starbelter.Core
 
             // Only find beds that are children of this ship
             allBeds.AddRange(shipRoot.GetComponentsInChildren<Bed>());
+
+            // Cache floor reference for each bed
+            foreach (var bed in allBeds)
+            {
+                var floor = bed.GetComponentInParent<ArenaFloor>();
+                if (floor != null)
+                {
+                    bedFloors[bed] = floor;
+                }
+            }
+
             Debug.Log($"[CrewManager] {shipRoot.name}: Found {allBeds.Count} beds");
         }
 
         /// <summary>
-        /// Generate crew for all beds that haven't generated yet.
+        /// Generate crew for all beds that haven't generated yet, then spawn units.
         /// </summary>
         public void GenerateAllCrew()
         {
             allCrew.Clear();
             crewByJob.Clear();
             crewByShift.Clear();
+            spawnedUnits.Clear();
 
             foreach (var bed in allBeds)
             {
@@ -101,11 +119,61 @@ namespace Starbelter.Core
                 if (bed.AssignedCrew != null)
                 {
                     RegisterCrew(bed.AssignedCrew);
+                    SpawnUnitAtBed(bed);
                 }
             }
 
             UpdateSummary();
-            Debug.Log($"[CrewManager] {shipRoot.name}: Generated {allCrew.Count} crew members");
+            Debug.Log($"[CrewManager] {shipRoot.name}: Generated {allCrew.Count} crew members, spawned {spawnedUnits.Count} units");
+        }
+
+        /// <summary>
+        /// Spawn a unit at a bed's position with correct floor layer.
+        /// </summary>
+        private void SpawnUnitAtBed(Bed bed)
+        {
+            if (unitPrefab == null)
+            {
+                Debug.LogWarning("[CrewManager] No unit prefab assigned - skipping unit spawn");
+                return;
+            }
+
+            var crew = bed.AssignedCrew;
+            if (crew == null) return;
+
+            // Spawn at bed position
+            var unitObj = Instantiate(unitPrefab, bed.transform.position, Quaternion.identity);
+            unitObj.name = $"Unit_{crew.RankAndName}";
+
+            // Parent to arena if available
+            if (arena != null)
+            {
+                unitObj.transform.SetParent(arena.transform);
+            }
+
+            // Get UnitController and set character
+            var unitController = unitObj.GetComponent<UnitController>();
+            if (unitController != null)
+            {
+                unitController.SetCharacter(crew.Character);
+                unitController.SetArena(arena);
+                spawnedUnits[crew] = unitController;
+            }
+
+            // Set floor layer
+            if (bedFloors.TryGetValue(bed, out var floor))
+            {
+                floor.SetUnitLayer(unitObj);
+                floor.RegisterUnit(unitController);
+            }
+
+            // Set up appearance
+            var appearance = unitObj.GetComponent<CharacterAppearance>();
+            if (appearance != null)
+            {
+                bool isMale = crew.Character.Gender == Gender.Male;
+                appearance.Initialize(isMale, crew.Character.SkinTone, crew.Character.HairStyle, crew.Character.HairColor);
+            }
         }
 
         /// <summary>
@@ -209,6 +277,19 @@ namespace Starbelter.Core
                 c.Character.FullName.Contains(name, System.StringComparison.OrdinalIgnoreCase) ||
                 c.Character.Callsign.Contains(name, System.StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>
+        /// Get the spawned unit for a crew member.
+        /// </summary>
+        public UnitController GetUnit(CrewMember crew)
+        {
+            return spawnedUnits.TryGetValue(crew, out var unit) ? unit : null;
+        }
+
+        /// <summary>
+        /// Get all spawned units.
+        /// </summary>
+        public IReadOnlyCollection<UnitController> GetAllUnits() => spawnedUnits.Values;
 
         #endregion
 
