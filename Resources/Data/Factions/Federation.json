@@ -1,0 +1,44 @@
+{
+  "factionId": "Federation",
+  "displayName": "Yorennian Federation",
+
+  "military": {
+    "fleetHQ": 1,
+    "bastions": 4,
+    "bases": 8,
+    "outposts": 18,
+    "militaryShipyards": 2,
+    "listeningPosts": 10
+  },
+
+  "economic": {
+    "miningStations": 12,
+    "industrialStations": 10,
+    "commercialHubs": 6,
+    "civilianShipyards": 3
+  },
+
+  "science": {
+    "researchStations": 6,
+    "observatories": 3
+  },
+
+  "civilian": {
+    "orbitalHabitats": 8,
+    "spaceports": 5
+  },
+
+  "ships": {
+    "battleships": 0,
+    "cruisers": 0,
+    "destroyers": 0,
+    "frigates": 0,
+    "corvettes": 0
+  },
+
+  "expansion": {
+    "homeSector": [2, 2],
+    "expansionPattern": "radial",
+    "aggressiveness": 0.5
+  }
+}

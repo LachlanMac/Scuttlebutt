@@ -69,8 +69,9 @@ namespace Starbelter.Arena
             FindConnectedDoors();
 
             isInitialized = true;
-
-            Debug.Log($"[Room] Initialized '{DisplayName}' ({roomId}) with {roomTiles.Count} tiles");
+            if(roomTiles.Count > 100){
+            Debug.Log($"Abnormally large [Room] Initialized '{DisplayName}' ({roomId}) with {roomTiles.Count} tiles");
+            }
         }
 
         /// <summary>

@@ -1,0 +1,52 @@
+{
+    "id": "sector_9_8",
+    "displayName": "Illidan's Wake",
+    "type": "DeepSpace",
+    "controlledBy": "None",
+    "galaxyX": 9,
+    "galaxyY": 8,
+    "pois": [
+        {
+            "id": "sector_9_8_belt_0",
+            "displayName": "Illidan's Wake Belt A",
+            "poiType": "AsteroidBelt",
+            "chunkX": 4,
+            "chunkY": 5,
+            "positionX": -5000.0,
+            "positionY": 5000.0,
+            "subType": "Dense",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 4880.6435546875,
+            "outerRadius": 7377.36376953125,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        },
+        {
+            "id": "sector_9_8_anomaly",
+            "displayName": "Energy Anomaly",
+            "poiType": "Anomaly",
+            "chunkX": 2,
+            "chunkY": 0,
+            "positionX": -25000.0,
+            "positionY": -45000.0,
+            "subType": "Unknown",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 0.0,
+            "outerRadius": 0.0,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        }
+    ]
+}

@@ -1,0 +1,31 @@
+{
+    "id": "sector_3_8",
+    "displayName": "Icarus Point",
+    "type": "Core",
+    "controlledBy": "None",
+    "galaxyX": 3,
+    "galaxyY": 8,
+    "pois": [
+        {
+            "id": "sector_3_8_belt_0",
+            "displayName": "Icarus Point Belt A",
+            "poiType": "AsteroidBelt",
+            "chunkX": 9,
+            "chunkY": 9,
+            "positionX": 45000.0,
+            "positionY": 45000.0,
+            "subType": "Medium",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 3863.98681640625,
+            "outerRadius": 8232.869140625,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        }
+    ]
+}

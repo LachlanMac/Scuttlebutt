@@ -37,13 +37,15 @@ namespace Starbelter.Core
         /// <param name="isOfficer">Officer or enlisted</param>
         /// <param name="rank">Pay grade (E-1 to E-9, O-1 to O-10)</param>
         /// <param name="seed">Optional seed for deterministic generation</param>
+        /// <param name="forcedGender">If set, overrides random gender selection</param>
         public static Character Generate(
             ProfessionCategory profession,
             Specialization specialization,
             ServiceBranch branch,
             bool isOfficer,
             int rank,
-            int? seed = null)
+            int? seed = null,
+            Gender? forcedGender = null)
         {
             EnsureNamesLoaded();
             System.Random rng = seed.HasValue ? new System.Random(seed.Value) : new System.Random();
@@ -54,8 +56,10 @@ namespace Starbelter.Core
             // Determine if this character is a prodigy
             bool isProdigy = rng.NextDouble() < PRODIGY_CHANCE;
 
-            // Generate identity (65% male, 35% female)
-            bool isFemale = rng.NextDouble() < 0.35;
+            // Generate identity (65% male, 35% female) - unless forced
+            bool isFemale = forcedGender.HasValue
+                ? forcedGender.Value == Gender.Female
+                : rng.NextDouble() < 0.35;
             string firstName = GetRandomName(isFemale ? femNames : mascNames, rng, isFemale ? "Jane" : "John");
             string lastName = GetRandomName(surnames, rng, "Doe");
             string callsign = GetCallsign(profession, rng);
@@ -186,7 +190,8 @@ namespace Starbelter.Core
         /// Generate a CrewMember for a Position (from Positions.json).
         /// Uses role adjacency for realistic cross-training based on experience.
         /// </summary>
-        public static CrewMember GenerateForPosition(Position position, Shift shift, int? seed = null)
+        /// <param name="forcedGender">If set, overrides random gender selection</param>
+        public static CrewMember GenerateForPosition(Position position, Shift shift, int? seed = null, Gender? forcedGender = null)
         {
             if (position == null)
             {
@@ -237,7 +242,8 @@ namespace Starbelter.Core
                 position.Branch,
                 position.IsOfficer,
                 rank,
-                seed
+                seed,
+                forcedGender
             );
 
             // Create crew member with all generated roles

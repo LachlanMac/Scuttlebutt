@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using Starbelter.Combat;
+using Starbelter.Ship;
 
 namespace Starbelter.Core
 {
@@ -18,6 +19,9 @@ namespace Starbelter.Core
 
         private static Dictionary<string, string[]> radioLines;
         private static bool radioLinesLoaded = false;
+
+        private static Dictionary<string, ShipData> ships;
+        private static bool shipsLoaded = false;
 
         /// <summary>
         /// Get a weapon by ID. Returns null if not found.
@@ -149,7 +153,7 @@ namespace Starbelter.Core
                 };
 
                 weapons[entry.id] = weapon;
-                Debug.Log($"[DataLoader] Loaded weapon: {entry.id} ({entry.name}) - Burst:{entry.canBurst}, Suppress:{entry.canSuppress}, Aimed:{entry.canAimedShot}");
+                //Debug.Log($"[DataLoader] Loaded weapon: {entry.id} ({entry.name}) - Burst:{entry.canBurst}, Suppress:{entry.canSuppress}, Aimed:{entry.canAimedShot}");
             }
 
             Debug.Log($"[DataLoader] Loaded {weapons.Count} weapons");
@@ -179,10 +183,145 @@ namespace Starbelter.Core
             enemyRoster = null;
             radioLinesLoaded = false;
             radioLines = null;
+            shipsLoaded = false;
+            ships = null;
             EnsureWeaponsLoaded();
             EnsureRostersLoaded();
             EnsureRadioLinesLoaded();
+            EnsureShipsLoaded();
         }
+
+        #region Ships
+
+        /// <summary>
+        /// Get ship data by ID. Returns a clone so each instance can have unique prefab refs.
+        /// </summary>
+        public static ShipData GetShip(string id)
+        {
+            EnsureShipsLoaded();
+            return ships.TryGetValue(id, out var ship) ? ship.Clone() : null;
+        }
+
+        /// <summary>
+        /// Get all ship IDs.
+        /// </summary>
+        public static IEnumerable<string> GetShipIds()
+        {
+            EnsureShipsLoaded();
+            return ships.Keys;
+        }
+
+        /// <summary>
+        /// Get ship data by ID without cloning (for read-only access).
+        /// </summary>
+        public static ShipData GetShipReadOnly(string id)
+        {
+            EnsureShipsLoaded();
+            return ships.TryGetValue(id, out var ship) ? ship : null;
+        }
+
+        private static void EnsureShipsLoaded()
+        {
+            if (shipsLoaded) return;
+            LoadShips();
+        }
+
+        // Ship category folders to scan
+        private static readonly string[] ShipCategoryFolders = {
+            "Fighter", "Bomber", "Shuttle", "Freighter",
+            "Corvette", "Destroyer", "Cruiser", "Battleship", "Station"
+        };
+
+        private static void LoadShips()
+        {
+            ships = new Dictionary<string, ShipData>();
+
+            // Load ships from each category folder
+            foreach (var folder in ShipCategoryFolders)
+            {
+                LoadShipsFromFolder(folder);
+            }
+
+            if (ships.Count == 0)
+            {
+                Debug.LogWarning("[DataLoader] No ships loaded! Check Resources/Data/Ships/ folders");
+            }
+            else
+            {
+                Debug.Log($"[DataLoader] Loaded {ships.Count} ships total");
+            }
+
+            shipsLoaded = true;
+        }
+
+        private static void LoadShipsFromFolder(string categoryFolder)
+        {
+            string path = $"Data/Ships/{categoryFolder}";
+            var jsonAssets = Resources.LoadAll<TextAsset>(path);
+
+            if (jsonAssets == null || jsonAssets.Length == 0)
+            {
+                // Not an error - folder might just be empty
+                return;
+            }
+
+            foreach (var jsonAsset in jsonAssets)
+            {
+                var entry = JsonUtility.FromJson<ShipEntry>(jsonAsset.text);
+                if (entry == null || string.IsNullOrEmpty(entry.id))
+                {
+                    Debug.LogWarning($"[DataLoader] Failed to parse ship JSON: {jsonAsset.name}");
+                    continue;
+                }
+
+                var shipData = new ShipData
+                {
+                    id = entry.id,
+                    displayName = entry.displayName,
+                    category = ParseShipCategory(entry.category),
+                    maxSpeed = entry.maxSpeed,
+                    acceleration = entry.acceleration,
+                    turnRate = entry.turnRate,
+                    warpSpeed = entry.warpSpeed,
+                    maxHull = entry.maxHull,
+                    maxShields = entry.maxShields,
+                    shieldRegenRate = entry.shieldRegenRate,
+                    approachSpeed = entry.approachSpeed,
+                    dockingSpeed = entry.dockingSpeed,
+                    landingDuration = entry.landingDuration,
+                    canDock = entry.canDock,
+                    hasHangar = entry.hasHangar,
+                    jumpSpeed = entry.jumpSpeed,
+                    jumpFuelCapacity = entry.jumpFuelCapacity,
+                    jumpFuelPerUnit = entry.jumpFuelPerUnit > 0 ? entry.jumpFuelPerUnit : 0.1f
+                };
+
+                // Load prefabs from Resources
+                shipData.LoadPrefabs();
+
+                ships[entry.id] = shipData;
+                Debug.Log($"[DataLoader] Loaded ship: {entry.id} ({entry.displayName}) - {shipData.category}");
+            }
+        }
+
+        private static ShipCategory ParseShipCategory(string category)
+        {
+            return category?.ToLower() switch
+            {
+                "fighter" => ShipCategory.Fighter,
+                "bomber" => ShipCategory.Bomber,
+                "shuttle" => ShipCategory.Shuttle,
+                "freighter" => ShipCategory.Freighter,
+                "corvette" => ShipCategory.Corvette,
+                "destroyer" => ShipCategory.Destroyer,
+                "cruiser" => ShipCategory.Cruiser,
+                "battleship" => ShipCategory.Battleship,
+                "station" => ShipCategory.Station,
+                _ => ShipCategory.Fighter
+            };
+        }
+
+        #endregion
 
         #region Radio Lines
 
@@ -685,6 +824,29 @@ namespace Starbelter.Core
         {
             public string @event;  // @ prefix because 'event' is a C# keyword
             public string[] variants;
+        }
+
+        [System.Serializable]
+        private class ShipEntry
+        {
+            public string id;
+            public string displayName;
+            public string category;
+            public float maxSpeed;
+            public float acceleration;
+            public float turnRate;
+            public float warpSpeed;
+            public float maxHull;
+            public float maxShields;
+            public float shieldRegenRate;
+            public float approachSpeed;
+            public float dockingSpeed;
+            public float landingDuration;
+            public bool canDock;
+            public bool hasHangar;
+            public float jumpSpeed;
+            public float jumpFuelCapacity;
+            public float jumpFuelPerUnit;
         }
     }
 }

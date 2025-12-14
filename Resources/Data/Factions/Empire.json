@@ -1,0 +1,44 @@
+{
+  "factionId": "Empire",
+  "displayName": "Zulradden Empire",
+
+  "military": {
+    "fleetHQ": 1,
+    "bastions": 5,
+    "bases": 10,
+    "outposts": 20,
+    "militaryShipyards": 3,
+    "listeningPosts": 8
+  },
+
+  "economic": {
+    "miningStations": 15,
+    "industrialStations": 8,
+    "commercialHubs": 5,
+    "civilianShipyards": 2
+  },
+
+  "science": {
+    "researchStations": 4,
+    "observatories": 2
+  },
+
+  "civilian": {
+    "orbitalHabitats": 6,
+    "spaceports": 4
+  },
+
+  "ships": {
+    "battleships": 0,
+    "cruisers": 0,
+    "destroyers": 1,
+    "frigates": 0,
+    "corvettes": 0
+  },
+
+  "expansion": {
+    "homeSector": [5, 5],
+    "expansionPattern": "radial",
+    "aggressiveness": 0.6
+  }
+}

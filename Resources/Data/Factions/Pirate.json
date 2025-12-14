@@ -1,0 +1,46 @@
+{
+  "factionId": "Pirate",
+  "displayName": "Pirate Clans",
+
+  "military": {
+    "fleetHQ": 0,
+    "bastions": 0,
+    "bases": 0,
+    "outposts": 0,
+    "militaryShipyards": 0,
+    "listeningPosts": 0
+  },
+
+  "economic": {
+    "miningStations": 0,
+    "industrialStations": 0,
+    "commercialHubs": 0,
+    "civilianShipyards": 0
+  },
+
+  "science": {
+    "researchStations": 0,
+    "observatories": 0
+  },
+
+  "civilian": {
+    "orbitalHabitats": 0,
+    "spaceports": 0
+  },
+
+  "pirateHavens": 8,
+
+  "ships": {
+    "battleships": 0,
+    "cruisers": 0,
+    "destroyers": 0,
+    "frigates": 0,
+    "corvettes": 0
+  },
+
+  "expansion": {
+    "homeSector": [8, 7],
+    "expansionPattern": "parasitic",
+    "aggressiveness": 0.8
+  }
+}

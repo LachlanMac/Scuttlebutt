@@ -1,0 +1,20 @@
+{
+  "id": "bomber_a",
+  "displayName": "Heavy Bomber",
+  "category": "Bomber",
+  "maxSpeed": 15,
+  "acceleration": 8,
+  "turnRate": 120,
+  "warpSpeed": 80,
+  "maxHull": 150,
+  "maxShields": 60,
+  "shieldRegenRate": 3,
+  "approachSpeed": 3,
+  "dockingSpeed": 4,
+  "landingDuration": 5,
+  "canDock": true,
+  "hasHangar": false,
+  "jumpSpeed": 0,
+  "jumpFuelCapacity": 0,
+  "jumpFuelPerUnit": 0
+}

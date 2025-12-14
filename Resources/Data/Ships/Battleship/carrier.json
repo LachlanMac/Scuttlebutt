@@ -1,0 +1,20 @@
+{
+  "id": "carrier",
+  "displayName": "Fleet Carrier",
+  "category": "Battleship",
+  "maxSpeed": 8,
+  "acceleration": 3,
+  "turnRate": 30,
+  "warpSpeed": 100,
+  "maxHull": 1200,
+  "maxShields": 500,
+  "shieldRegenRate": 15,
+  "approachSpeed": 1,
+  "dockingSpeed": 2,
+  "landingDuration": 10,
+  "canDock": false,
+  "hasHangar": true,
+  "jumpSpeed": 200,
+  "jumpFuelCapacity": 5000,
+  "jumpFuelPerUnit": 0.03
+}

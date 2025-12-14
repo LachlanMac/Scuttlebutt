@@ -1,0 +1,20 @@
+{
+  "id": "dropship",
+  "displayName": "Assault Dropship",
+  "category": "Shuttle",
+  "maxSpeed": 20,
+  "acceleration": 12,
+  "turnRate": 140,
+  "warpSpeed": 85,
+  "maxHull": 200,
+  "maxShields": 80,
+  "shieldRegenRate": 4,
+  "approachSpeed": 3,
+  "dockingSpeed": 5,
+  "landingDuration": 6,
+  "canDock": true,
+  "hasHangar": false,
+  "jumpSpeed": 60,
+  "jumpFuelCapacity": 150,
+  "jumpFuelPerUnit": 0.1
+}

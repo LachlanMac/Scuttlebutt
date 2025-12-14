@@ -1,0 +1,34 @@
+{
+    "galaxyName": "Starbelter Galaxy",
+    "seed": 124,
+    "galaxySize": 10,
+    "chunkSize": 10000,
+    "chunksPerSector": 10,
+    "homeworlds": [
+        {
+            "faction": "Empire",
+            "x": 5,
+            "y": 5
+        },
+        {
+            "faction": "Federation",
+            "x": 2,
+            "y": 2
+        },
+        {
+            "faction": "Consortium",
+            "x": 7,
+            "y": 2
+        },
+        {
+            "faction": "Pirate",
+            "x": 8,
+            "y": 7
+        },
+        {
+            "faction": "Independent",
+            "x": 2,
+            "y": 7
+        }
+    ]
+}

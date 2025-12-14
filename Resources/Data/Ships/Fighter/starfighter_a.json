@@ -1,0 +1,20 @@
+{
+  "id": "starfighter_a",
+  "displayName": "Starfighter Mark I",
+  "category": "Fighter",
+  "maxSpeed": 25,
+  "acceleration": 15,
+  "turnRate": 200,
+  "warpSpeed": 100,
+  "maxHull": 80,
+  "maxShields": 40,
+  "shieldRegenRate": 5,
+  "approachSpeed": 4,
+  "dockingSpeed": 6,
+  "landingDuration": 4,
+  "canDock": true,
+  "hasHangar": false,
+  "jumpSpeed": 0,
+  "jumpFuelCapacity": 0,
+  "jumpFuelPerUnit": 0
+}

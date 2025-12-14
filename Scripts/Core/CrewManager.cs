@@ -101,6 +101,7 @@ namespace Starbelter.Core
 
         /// <summary>
         /// Generate crew for all beds that haven't generated yet, then spawn units.
+        /// For shared quarters (rooms with 2+ beds), gender is assigned at room level.
         /// </summary>
         public void GenerateAllCrew()
         {
@@ -109,22 +110,66 @@ namespace Starbelter.Core
             crewByShift.Clear();
             spawnedUnits.Clear();
 
+            // Group beds by their parent Room
+            var bedsByRoom = new Dictionary<Starbelter.Arena.Room, List<Bed>>();
+            var bedsWithoutRoom = new List<Bed>();
+
             foreach (var bed in allBeds)
             {
-                if (bed.AssignedCrew == null && !string.IsNullOrEmpty(bed.PositionId))
+                var room = bed.GetComponentInParent<Starbelter.Arena.Room>();
+                if (room != null)
                 {
-                    bed.GenerateCrew();
+                    if (!bedsByRoom.ContainsKey(room))
+                        bedsByRoom[room] = new List<Bed>();
+                    bedsByRoom[room].Add(bed);
+                }
+                else
+                {
+                    bedsWithoutRoom.Add(bed);
+                }
+            }
+
+            // Generate crew for each room
+            foreach (var kvp in bedsByRoom)
+            {
+                var room = kvp.Key;
+                var beds = kvp.Value;
+
+                // If room has 2+ beds, decide gender at room level (65% male, 35% female)
+                Gender? roomGender = null;
+                if (beds.Count >= 2)
+                {
+                    roomGender = Random.value < 0.65f ? Gender.Male : Gender.Female;
                 }
 
-                if (bed.AssignedCrew != null)
+                foreach (var bed in beds)
                 {
-                    RegisterCrew(bed.AssignedCrew);
-                    SpawnUnitAtBed(bed);
+                    GenerateAndSpawnForBed(bed, roomGender);
                 }
+            }
+
+            // Generate crew for beds without a room (single quarters, etc.)
+            foreach (var bed in bedsWithoutRoom)
+            {
+                GenerateAndSpawnForBed(bed, null);
             }
 
             UpdateSummary();
             Debug.Log($"[CrewManager] {shipRoot.name}: Generated {allCrew.Count} crew members, spawned {spawnedUnits.Count} units");
+        }
+
+        private void GenerateAndSpawnForBed(Bed bed, Gender? forcedGender)
+        {
+            if (bed.AssignedCrew == null && !string.IsNullOrEmpty(bed.PositionId))
+            {
+                bed.GenerateCrew(forcedGender);
+            }
+
+            if (bed.AssignedCrew != null)
+            {
+                RegisterCrew(bed.AssignedCrew);
+                SpawnUnitAtBed(bed);
+            }
         }
 
         /// <summary>

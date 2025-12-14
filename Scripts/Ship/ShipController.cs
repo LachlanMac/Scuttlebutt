@@ -46,7 +46,7 @@ namespace Starbelter.Core
         }
 
         /// <summary>
-        /// Initialize with a linked arena (called by WorldManager on spawn).
+        /// Initialize with a linked arena (called by SectorManager on spawn).
         /// </summary>
         public void Initialize(Starbelter.Arena.Arena linkedArena)
         {

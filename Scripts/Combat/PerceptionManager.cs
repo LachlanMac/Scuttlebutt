@@ -34,7 +34,7 @@ namespace Starbelter.Combat
         [SerializeField] private float aimedShotDecayTime = 10f;
 
         [Header("Debug")]
-        [SerializeField] private bool showDebugGizmos = true;
+        [SerializeField] private bool showDebugGizmos = false;
 
         #endregion
 

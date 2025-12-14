@@ -1,0 +1,20 @@
+{
+  "id": "frigate",
+  "displayName": "Light Frigate",
+  "category": "Corvette",
+  "maxSpeed": 12,
+  "acceleration": 5,
+  "turnRate": 60,
+  "warpSpeed": 120,
+  "maxHull": 500,
+  "maxShields": 200,
+  "shieldRegenRate": 10,
+  "approachSpeed": 2,
+  "dockingSpeed": 3,
+  "landingDuration": 8,
+  "canDock": false,
+  "hasHangar": true,
+  "jumpSpeed": 150,
+  "jumpFuelCapacity": 1000,
+  "jumpFuelPerUnit": 0.05
+}

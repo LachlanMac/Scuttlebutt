@@ -1,0 +1,44 @@
+{
+  "factionId": "Independent",
+  "displayName": "Free Colonies",
+
+  "military": {
+    "fleetHQ": 0,
+    "bastions": 0,
+    "bases": 2,
+    "outposts": 6,
+    "militaryShipyards": 0,
+    "listeningPosts": 2
+  },
+
+  "economic": {
+    "miningStations": 8,
+    "industrialStations": 4,
+    "commercialHubs": 2,
+    "civilianShipyards": 1
+  },
+
+  "science": {
+    "researchStations": 2,
+    "observatories": 1
+  },
+
+  "civilian": {
+    "orbitalHabitats": 5,
+    "spaceports": 3
+  },
+
+  "ships": {
+    "battleships": 0,
+    "cruisers": 0,
+    "destroyers": 0,
+    "frigates": 0,
+    "corvettes": 0
+  },
+
+  "expansion": {
+    "homeSector": [2, 7],
+    "expansionPattern": "random",
+    "aggressiveness": 0.1
+  }
+}

@@ -890,7 +890,7 @@ MonoBehaviour:
   memoryDuration: 3
   myTeam: 1
   aimedShotDecayTime: 10
-  showDebugGizmos: 1
+  showDebugGizmos: 0
 --- !u!1 &3678709318002747100
 GameObject:
   m_ObjectHideFlags: 0

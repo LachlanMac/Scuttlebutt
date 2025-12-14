@@ -1,0 +1,31 @@
+{
+    "id": "sector_5_1",
+    "displayName": "Jormungandr Belt",
+    "type": "Frontier",
+    "controlledBy": "None",
+    "galaxyX": 5,
+    "galaxyY": 1,
+    "pois": [
+        {
+            "id": "sector_5_1_belt_0",
+            "displayName": "Jormungandr Belt Belt A",
+            "poiType": "AsteroidBelt",
+            "chunkX": 3,
+            "chunkY": 6,
+            "positionX": -15000.0,
+            "positionY": 15000.0,
+            "subType": "Dense",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 4249.8212890625,
+            "outerRadius": 7528.55126953125,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        }
+    ]
+}

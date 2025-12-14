@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using Pathfinding;
 using Starbelter.AI;
+using Starbelter.Space;
 
 namespace Starbelter.Arena
 {
@@ -24,8 +25,12 @@ namespace Starbelter.Arena
         private List<FloorConnection> floorConnections = new List<FloorConnection>();
         private List<Elevator> elevators = new List<Elevator>();
         private List<Portal> portals = new List<Portal>();
+        private List<HangarEntrance> hangarEntrances = new List<HangarEntrance>();
         private List<UnitController> registeredUnits = new List<UnitController>();
         private Dictionary<UnitController, ArenaFloor> unitFloorMap = new Dictionary<UnitController, ArenaFloor>();
+
+        // Space link (set at runtime when spawned as ship interior)
+        private SpaceVessel parentVessel;
 
         // Events
         public event System.Action<Arena> OnArenaInitialized;
@@ -40,8 +45,11 @@ namespace Starbelter.Arena
         public IReadOnlyList<ArenaFloor> Floors => floors;
         public IReadOnlyList<Portal> Portals => portals;
         public IReadOnlyList<Elevator> Elevators => elevators;
+        public IReadOnlyList<HangarEntrance> HangarEntrances => hangarEntrances;
         public IReadOnlyList<UnitController> Units => registeredUnits;
         public int FloorCount => floors.Count;
+        public SpaceVessel ParentVessel => parentVessel;
+        public bool HasParentVessel => parentVessel != null;
 
         /// <summary>
         /// Get the combined bounds of all floors.
@@ -141,10 +149,45 @@ namespace Starbelter.Arena
 
             Debug.Log($"[Arena] Found {elevators.Count} elevators");
 
+            // Find hangar entrances
+            hangarEntrances.AddRange(GetComponentsInChildren<HangarEntrance>());
+            Debug.Log($"[Arena] Found {hangarEntrances.Count} hangar entrances");
+
             isInitialized = true;
             OnArenaInitialized?.Invoke(this);
 
             Debug.Log($"[Arena] Arena '{arenaId}' initialized with {floors.Count} floors");
+        }
+
+        /// <summary>
+        /// Set the parent SpaceVessel (called when this arena is spawned as a ship interior).
+        /// </summary>
+        public void SetParentVessel(SpaceVessel vessel)
+        {
+            parentVessel = vessel;
+            Debug.Log($"[Arena] '{arenaId}' linked to vessel '{vessel?.VesselId ?? "null"}'");
+        }
+
+        /// <summary>
+        /// Get a hangar entrance by its exit ID.
+        /// </summary>
+        public HangarEntrance GetHangarEntrance(string exitId)
+        {
+            foreach (var entrance in hangarEntrances)
+            {
+                if (entrance.ExitId == exitId)
+                    return entrance;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Check if any hangar with the given exit ID has available landing slots.
+        /// </summary>
+        public bool HasAvailableHangarSlot(string exitId)
+        {
+            var entrance = GetHangarEntrance(exitId);
+            return entrance != null && entrance.HasAvailableSlot();
         }
 
         /// <summary>

@@ -1,1 +1,2 @@
-- echo "" > /mnt/c/Users/lachl/AppData/Local/Unity/Editor/Editor.log clears the log when we want to read from that for debugging.
+- Unity Editor log location: /mnt/c/Users/lachl/AppData/Local/Unity/Editor/Editor.log
+- Use `tail -200` to read recent log entries for debugging

@@ -1,0 +1,52 @@
+{
+    "id": "sector_2_0",
+    "displayName": "Eventide Reach",
+    "type": "DeepSpace",
+    "controlledBy": "None",
+    "galaxyX": 2,
+    "galaxyY": 0,
+    "pois": [
+        {
+            "id": "sector_2_0_belt_0",
+            "displayName": "Eventide Reach Belt A",
+            "poiType": "AsteroidBelt",
+            "chunkX": 1,
+            "chunkY": 2,
+            "positionX": -35000.0,
+            "positionY": -25000.0,
+            "subType": "Medium",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 3909.20654296875,
+            "outerRadius": 9218.1884765625,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        },
+        {
+            "id": "sector_2_0_belt_1",
+            "displayName": "Eventide Reach Belt B",
+            "poiType": "AsteroidBelt",
+            "chunkX": 2,
+            "chunkY": 4,
+            "positionX": -25000.0,
+            "positionY": -5000.0,
+            "subType": "Medium",
+            "parentId": "",
+            "orbitRadius": 0.0,
+            "innerRadius": 3679.99072265625,
+            "outerRadius": 9058.6875,
+            "radius": 0.0,
+            "gravityWellRadius": 0.0,
+            "controlledBy": "",
+            "orbitingBodyId": "",
+            "orbitalSlot": 0,
+            "spriteName": "",
+            "size": 0.0
+        }
+    ]
+}

@@ -55,7 +55,8 @@ namespace Starbelter.Core
         /// Generate a crew member for this bed based on the assigned position.
         /// Called by CrewManager.
         /// </summary>
-        public CrewMember GenerateCrew()
+        /// <param name="forcedGender">If set, overrides random gender (for shared quarters)</param>
+        public CrewMember GenerateCrew(Gender? forcedGender = null)
         {
             if (string.IsNullOrEmpty(positionId))
             {
@@ -73,7 +74,7 @@ namespace Starbelter.Core
 
             // Generate crew member
             int? seedValue = seed >= 0 ? seed : null;
-            assignedCrew = CharacterFactory.GenerateForPosition(position, shift, seedValue);
+            assignedCrew = CharacterFactory.GenerateForPosition(position, shift, seedValue, forcedGender);
 
             if (assignedCrew != null)
             {

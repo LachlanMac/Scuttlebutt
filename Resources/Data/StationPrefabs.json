@@ -1,0 +1,29 @@
+{
+  "prefabPaths": [
+    { "size": "Large", "path": "Prefabs/Stations/Station_Large" },
+    { "size": "Medium", "path": "Prefabs/Stations/Station_Medium" },
+    { "size": "Small", "path": "Prefabs/Stations/Station_Small" }
+  ],
+
+  "typeMappings": [
+    { "type": "FleetHQ", "size": "Large" },
+    { "type": "Bastion", "size": "Large" },
+    { "type": "CommercialHub", "size": "Large" },
+    { "type": "Spaceport", "size": "Large" },
+
+    { "type": "Base", "size": "Medium" },
+    { "type": "MilitaryShipyard", "size": "Medium" },
+    { "type": "IndustrialStation", "size": "Medium" },
+    { "type": "CivilianShipyard", "size": "Medium" },
+    { "type": "OrbitalHabitat", "size": "Medium" },
+
+    { "type": "Outpost", "size": "Small" },
+    { "type": "ListeningPost", "size": "Small" },
+    { "type": "MiningStation", "size": "Small" },
+    { "type": "ResearchStation", "size": "Small" },
+    { "type": "Observatory", "size": "Small" },
+    { "type": "PirateHaven", "size": "Small" }
+  ],
+
+  "fallbackSize": "Small"
+}

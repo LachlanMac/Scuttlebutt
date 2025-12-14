@@ -134,7 +134,6 @@ public class ShieldController : MonoBehaviour
         float overloadedMaxShield = maxShield + CalculateOverload();
         float deltaShield = (rechargeRate * CalculateEfficiency()) - naturalDrain;
         currentShield = Mathf.Clamp(currentShield + deltaShield, 0, overloadedMaxShield);
-        Debug.Log(currentShield);
     }
 
 

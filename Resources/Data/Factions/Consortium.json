@@ -1,0 +1,44 @@
+{
+  "factionId": "Consortium",
+  "displayName": "Trade Consortium",
+
+  "military": {
+    "fleetHQ": 0,
+    "bastions": 1,
+    "bases": 3,
+    "outposts": 8,
+    "militaryShipyards": 1,
+    "listeningPosts": 4
+  },
+
+  "economic": {
+    "miningStations": 20,
+    "industrialStations": 15,
+    "commercialHubs": 12,
+    "civilianShipyards": 4
+  },
+
+  "science": {
+    "researchStations": 2,
+    "observatories": 1
+  },
+
+  "civilian": {
+    "orbitalHabitats": 10,
+    "spaceports": 8
+  },
+
+  "ships": {
+    "battleships": 0,
+    "cruisers": 0,
+    "destroyers": 0,
+    "frigates": 0,
+    "corvettes": 0
+  },
+
+  "expansion": {
+    "homeSector": [7, 2],
+    "expansionPattern": "scattered",
+    "aggressiveness": 0.2
+  }
+}

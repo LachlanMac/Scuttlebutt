@@ -1,0 +1,20 @@
+{
+  "id": "destroyer_default",
+  "displayName": "Destroyer",
+  "category": "Destroyer",
+  "maxSpeed": 10,
+  "acceleration": 4,
+  "turnRate": 45,
+  "warpSpeed": 110,
+  "maxHull": 800,
+  "maxShields": 350,
+  "shieldRegenRate": 12,
+  "approachSpeed": 1.5,
+  "dockingSpeed": 2.5,
+  "landingDuration": 9,
+  "canDock": false,
+  "hasHangar": true,
+  "jumpSpeed": 175,
+  "jumpFuelCapacity": 2000,
+  "jumpFuelPerUnit": 0.04
+}

@@ -1,0 +1,20 @@
+{
+  "id": "shuttle",
+  "displayName": "Personnel Shuttle",
+  "category": "Shuttle",
+  "maxSpeed": 18,
+  "acceleration": 10,
+  "turnRate": 150,
+  "warpSpeed": 90,
+  "maxHull": 120,
+  "maxShields": 50,
+  "shieldRegenRate": 4,
+  "approachSpeed": 3,
+  "dockingSpeed": 4,
+  "landingDuration": 5,
+  "canDock": true,
+  "hasHangar": false,
+  "jumpSpeed": 80,
+  "jumpFuelCapacity": 200,
+  "jumpFuelPerUnit": 0.08
+}

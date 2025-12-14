@@ -107,7 +107,7 @@ namespace Starbelter.Space
 
         /// <summary>
         /// Launch a vessel from an arena (e.g., fighter launching from hangar).
-        /// Uses WorldManager for spawning.
+        /// Uses SectorManager for spawning.
         /// </summary>
         public void LaunchVesselFromArena(UnitController unit, Portal exitPortal, GameObject vesselPrefab)
         {
@@ -120,15 +120,15 @@ namespace Starbelter.Space
             // Get the parent ship's space position
             Vector2 spacePosition = (Vector2)exitPortal.transform.position + exitPortal.SpaceExitOffset;
 
-            // Use WorldManager to spawn
-            if (WorldManager.Instance != null)
+            // Use SectorManager to spawn
+            if (Strategic.SectorManager.Instance != null)
             {
-                var entity = WorldManager.Instance.SpawnSpaceOnly(vesselPrefab, spacePosition, unit.name);
+                var entity = Strategic.SectorManager.Instance.SpawnSpaceOnly(vesselPrefab, spacePosition, unit.name);
                 Debug.Log($"[SpaceManager] Launched '{unit.name}' at {spacePosition}");
             }
             else
             {
-                Debug.LogError("[SpaceManager] WorldManager not available for launching vessel");
+                Debug.LogError("[SpaceManager] SectorManager not available for launching vessel");
             }
         }
 
